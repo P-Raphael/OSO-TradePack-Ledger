@@ -1,4 +1,5 @@
 local ADDON_NAME = "TradePacks"
+local ADDON_VERSION = "1.0.1"
 local SAVE_KEY = "TradePacksState"
 local HISTORY_SAVE_KEY = "TradePacksHistoryState"
 local OPENER_SAVE_KEY = "TradePacksOpenerPosition"
@@ -1757,7 +1758,16 @@ startAuctionRefresh = function(force)
 
     if not (recordPayoutValue and recordPayoutValue(record)) then
       local itemType = (resolvePayoutItemType and resolvePayoutItemType(record)) or record.payoutItemType
-      local searchName = (payoutSearchName and payoutSearchName(record)) or record.payoutName
+      -- payoutSearchName already strips numeric/empty names; only fall back to the
+      -- raw payoutName when it is a real (non-numeric) name. Feeding an item-type
+      -- id into the auction search yields no results.
+      local searchName = payoutSearchName and payoutSearchName(record)
+      if not searchName then
+        local fallback = compactText(record.payoutName)
+        if fallback ~= "" and not tonumber(fallback) then
+          searchName = fallback
+        end
+      end
       local key = normalizeKey(itemType)
       requestPrice(key, itemType, searchName, "payout")
     end
@@ -2369,6 +2379,15 @@ isOnyxPayout = function(record)
   end
 
   if tonumber(record.payoutItemType) == ONYX_ITEM_TYPE then
+    return true
+  end
+
+  -- Auroran Cargo always pays out in Onyx, so trust the cargo name as the source
+  -- of truth. The client's Onyx item-type id has changed across game patches; an
+  -- earlier fix only normalised it when payoutItemType was missing, so records
+  -- carrying a newer id (e.g. 1107253) were never recognised as Onyx and their
+  -- auction price never resolved ("No AH result").
+  if compactText(record.cargoName) == "Auroran Cargo" then
     return true
   end
 
@@ -3311,6 +3330,9 @@ local function createUi()
   ui.titleLabel = makeLabel("TradePacksTitleLabel", parent, 0, 27, LEDGER_WIDTH, 30, "OSO Packs Service")
   styleText(ui.titleLabel, "brown", ALIGN_CENTER or CENTER)
   pcall(function() ui.titleLabel.style:SetFontSize(26) end)
+  ui.versionLabel = makeLabel("TradePacksVersionLabel", parent, 14, 14, 80, 18, "v" .. ADDON_VERSION)
+  styleText(ui.versionLabel, TEXT_BROWN, ALIGN_LEFT or LEFT)
+  pcall(function() ui.versionLabel.style:SetFontSize(12) end)
   ui.totalLabel = makeLabel("TradePacksTotalLabel", parent, 0, 68, LEDGER_WIDTH, 22, "Expected Profit: ?")
   styleText(ui.totalLabel, TEXT_BROWN, ALIGN_CENTER or CENTER)
   ui.loadingLabel = makeLabel("TradePacksLoadingLabel", parent, 218, 92, 178, 22, "Prices Are Loading")
@@ -3576,4 +3598,4 @@ TradePacksLedger = {
   State = state
 }
 
-ADDON:ChatLog("TradePacks loaded")
+ADDON:ChatLog("TradePacks v" .. ADDON_VERSION .. " loaded")
