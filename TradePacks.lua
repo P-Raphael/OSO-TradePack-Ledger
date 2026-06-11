@@ -1,5 +1,5 @@
 local ADDON_NAME = "TradePacks"
-local ADDON_VERSION = "1.0.1"
+local ADDON_VERSION = "1.1.1"
 local SAVE_KEY = "TradePacksState"
 local HISTORY_SAVE_KEY = "TradePacksHistoryState"
 local OPENER_SAVE_KEY = "TradePacksOpenerPosition"
@@ -14,16 +14,22 @@ local ROW_COUNT = 11
 local AUCTION_GRADE_ALL = 0
 local AUCTION_GRADE_NORMAL = 1
 local DEFAULT_DELAY_SECONDS = 8 * 60 * 60
-local DETAIL_LINE_COUNT = 6
+local DETAIL_LINE_COUNT = 7
 local ONYX_ITEM_TYPE = 979983
 local ONYX_DISPLAY_NAME = "Onyx"
 local ONYX_AUCTION_SEARCH_NAME = "Onyx Archeum Essence"
 local ONYX_MIN_REASONABLE_UNIT_PRICE = 1 * 10000
 local ONYX_MAX_REASONABLE_UNIT_PRICE = 100 * 10000
+-- The Onyx item-type id has changed across game patches; ids the client used in
+-- earlier patches still appear on old records and must keep resolving as Onyx.
+local ONYX_LEGACY_ITEM_TYPES = {
+  [1107253] = true
+}
 local LEDGER_WIDTH = 610
-local LEDGER_HEIGHT = 744
+local LEDGER_HEIGHT = 762
 local HISTORY_WIDTH = 360
-local HISTORY_HEIGHT = 270
+local HISTORY_HEIGHT = 440
+local MAX_DAILY_HISTORY_ROWS = 6
 local RESET_CONFIRM_WIDTH = 316
 local RESET_CONFIRM_HEIGHT = 154
 local WINDOW_SKIN_PATH = "ui/common/default.dds"
@@ -193,7 +199,8 @@ local function defaultHistoryState()
     migratedFromRecords = false,
     dailyProfitCopper = 0,
     dailyUnknownCount = 0,
-    dailyStartTime = 0
+    dailyStartTime = 0,
+    dailyHistory = {}
   }
 end
 
@@ -274,11 +281,39 @@ historyState.dailyProfitCopper = tonumber(historyState.dailyProfitCopper) or 0
 historyState.dailyUnknownCount = tonumber(historyState.dailyUnknownCount) or 0
 historyState.dailyStartTime = tonumber(historyState.dailyStartTime) or 0
 historyState.migratedFromRecords = historyState.migratedFromRecords == true
+if type(historyState.dailyHistory) ~= "table" then
+  historyState.dailyHistory = {}
+end
 
 for _, record in ipairs(state.records) do
   if record.cargoName == "Auroran Cargo" then
-    record.payoutItemType = record.payoutItemType or ONYX_ITEM_TYPE
-    record.payoutName = record.payoutName or ONYX_DISPLAY_NAME
+    local existingName = type(record.payoutName) == "string" and record.payoutName:lower() or ""
+    local nameIsOnyx = existingName == ""
+      or existingName:find("onyx", 1, true) ~= nil
+      or tonumber(existingName) ~= nil
+    local itemType = tonumber(record.payoutItemType)
+    local typeIsOnyx = itemType == nil
+      or itemType == ONYX_ITEM_TYPE
+      or ONYX_LEGACY_ITEM_TYPES[itemType] == true
+    if nameIsOnyx and typeIsOnyx then
+      record.payoutItemType = record.payoutItemType or ONYX_ITEM_TYPE
+      record.payoutName = record.payoutName or ONYX_DISPLAY_NAME
+      -- Repair Onyx records locked at an out-of-range price while the Onyx
+      -- sanity check was bypassed (regression in a prior session). PAID records
+      -- are never touched: their profit is final.
+      local locked = tonumber(record.payoutUnitPriceCopper)
+      if not record.paid and locked
+        and (locked < ONYX_MIN_REASONABLE_UNIT_PRICE or locked > ONYX_MAX_REASONABLE_UNIT_PRICE) then
+        record.payoutUnitPriceCopper = nil
+        record.payoutPricedAt = nil
+      end
+    elseif not typeIsOnyx and existingName:find("onyx", 1, true) ~= nil then
+      -- Repair records that an earlier migration mislabelled "Onyx" even though
+      -- the sale event captured a different payout item (e.g. Dragon Essence
+      -- Stabilizer). The real name is restored from the item type after the
+      -- game API helpers are defined (see backfill near the end of this file).
+      record.payoutName = nil
+    end
     record.costCopper = record.costCopper or state.settings.costPresets["Auroran Cargo"]
     record.costStatus = record.costStatus or "preset"
     record.costSource = record.costSource or "preset"
@@ -286,6 +321,54 @@ for _, record in ipairs(state.records) do
     record.costStatus = "snapshot"
   elseif not record.costCopper and not record.costStatus then
     record.costStatus = "unknown"
+  end
+end
+
+do
+  local cleaned = {}
+  for _, record in ipairs(state.records) do
+    local name = type(record.cargoName) == "string" and record.cargoName:match("^%s*(.-)%s*$") or ""
+    if name ~= "" and name ~= "?" and name ~= "Unknown Cargo" then
+      cleaned[#cleaned + 1] = record
+    end
+  end
+  state.records = cleaned
+end
+
+do -- TEST MOCK: Auroran Cargo / Dragon Essence Stabilizer price lookup check
+  local DES_ITEM_TYPE = 32106
+  local mock = nil
+  for _, r in ipairs(state.records) do
+    if r.cargoName == "Auroran Cargo" and r.payoutName == "Dragon Essence Stabilizer" then
+      mock = r
+      break
+    end
+  end
+  if mock then
+    -- Repair a mock saved before the Onyx migration fix: force the real item
+    -- type and unlock any payout price snapshotted from the Onyx lookup.
+    if tonumber(mock.payoutItemType) ~= DES_ITEM_TYPE then
+      mock.payoutItemType = DES_ITEM_TYPE
+      mock.payoutUnitPriceCopper = nil
+      mock.payoutPricedAt = nil
+    end
+  else
+    local now = os.time()
+    table.insert(state.records, {
+      id = state.nextId,
+      cargoName = "Auroran Cargo",
+      payoutName = "Dragon Essence Stabilizer",
+      payoutItemType = DES_ITEM_TYPE,
+      payoutCount = 1,
+      soldAt = now,
+      dayKeyUtc2 = math.floor((now - 2 * 3600) / 86400),
+      delaySeconds = DEFAULT_DELAY_SECONDS,
+      costCopper = 260000,
+      costStatus = "preset",
+      costSource = "preset",
+      paid = false,
+    })
+    state.nextId = state.nextId + 1
   end
 end
 
@@ -1088,6 +1171,19 @@ local function getRecordStatus(record)
   return "Waiting"
 end
 
+local refreshUi
+local updateFilterButtons
+local startAuctionRefresh
+local resolvePayoutItemType
+local payoutSearchName
+local resolveRecordIcon
+local handleAuctionItemSearched
+local handleLowestPrice
+local readSearchedAuctionResults
+local recordProfit
+local trySnapshotPayoutValue
+local tryCompletePayoutValues
+
 local function markDeliveredRecordsPaid()
   local changed = false
   local now = nowSeconds()
@@ -1097,6 +1193,11 @@ local function markDeliveredRecordsPaid()
       local delay = tonumber(record.delaySeconds) or DEFAULT_DELAY_SECONDS
       if now >= soldAt + delay then
         record.paid = true
+        -- Freeze the payout at delivery so later price changes never shift the
+        -- profit of a PAID record.
+        if trySnapshotPayoutValue then
+          trySnapshotPayoutValue(record)
+        end
         changed = true
       end
     end
@@ -1126,17 +1227,6 @@ local function filteredRecords()
   end
   return list
 end
-
-local refreshUi
-local updateFilterButtons
-local startAuctionRefresh
-local resolvePayoutItemType
-local payoutSearchName
-local resolveRecordIcon
-local handleAuctionItemSearched
-local handleLowestPrice
-local readSearchedAuctionResults
-local recordProfit
 
 local function ledgerIsVisible()
   if ui.window and type(ui.window.IsVisible) == "function" then
@@ -1266,21 +1356,39 @@ local function recordDayKeyUtc2(record)
   return math.floor(((tonumber(record.soldAt) or 0) - UTC_MINUS_2_OFFSET) / 86400)
 end
 
+local function dayKeyLabel(dayKey)
+  local diff = currentDayKeyUtc2() - dayKey
+  if diff == 0 then return "Today" end
+  if diff == 1 then return "Yesterday" end
+  return tostring(diff) .. " days ago"
+end
+
 local function recomputeDailyProfit()
   local todayKey = currentDayKeyUtc2()
   historyState.dailyStartTime = todayKey
   historyState.dailyProfitCopper = 0
   historyState.dailyUnknownCount = 0
+  local byDay = {}
   for _, record in ipairs(state.records) do
-    if recordDayKeyUtc2(record) == todayKey then
-      local profit = recordProfit and recordProfit(record)
-      if profit then
+    local dk = recordDayKeyUtc2(record)
+    if not byDay[dk] then
+      byDay[dk] = {profitCopper = 0, unknownCount = 0, packCount = 0}
+    end
+    byDay[dk].packCount = byDay[dk].packCount + 1
+    local profit = recordProfit and recordProfit(record)
+    if profit then
+      byDay[dk].profitCopper = byDay[dk].profitCopper + profit
+      if dk == todayKey then
         historyState.dailyProfitCopper = historyState.dailyProfitCopper + profit
-      else
+      end
+    else
+      byDay[dk].unknownCount = byDay[dk].unknownCount + 1
+      if dk == todayKey then
         historyState.dailyUnknownCount = historyState.dailyUnknownCount + 1
       end
     end
   end
+  historyState.dailyHistory = byDay
 end
 
 local function checkDailyReset()
@@ -1415,6 +1523,9 @@ local function createSaleRecord(cargoName, sourceText)
   end
 
   initializeRecordCost(record)
+  if trySnapshotPayoutValue then
+    trySnapshotPayoutValue(record)
+  end
 
   table.insert(state.records, record)
   addRecordToHistory(record)
@@ -1570,6 +1681,9 @@ local function storeAuctionPrice(itemType, grade, price)
   finishAuctionLookup(key)
   runtime.auctionStatus = nil
   tryCompleteMaterialCosts()
+  if tryCompletePayoutValues then
+    tryCompletePayoutValues()
+  end
   if processNextAuctionSearch and processNextAuctionSearch() then
     setAuctionLoading(true)
   elseif hasPendingAuctionLookups() then
@@ -1718,6 +1832,9 @@ startAuctionRefresh = function(force)
   runtime.lastAuctionSearchKey = nil
   setAuctionLoading(false)
   tryCompleteMaterialCosts()
+  if tryCompletePayoutValues then
+    tryCompletePayoutValues()
+  end
 
   local records = state.records
   local requested = {}
@@ -1768,7 +1885,7 @@ startAuctionRefresh = function(force)
           searchName = fallback
         end
       end
-      local key = normalizeKey(itemType)
+      local key = normalizeKey(itemType) or normalizeNameKey(searchName)
       requestPrice(key, itemType, searchName, "payout")
     end
   end
@@ -2378,21 +2495,27 @@ isOnyxPayout = function(record)
     return false
   end
 
-  if tonumber(record.payoutItemType) == ONYX_ITEM_TYPE then
-    return true
-  end
-
-  -- Auroran Cargo always pays out in Onyx, so trust the cargo name as the source
-  -- of truth. The client's Onyx item-type id has changed across game patches; an
-  -- earlier fix only normalised it when payoutItemType was missing, so records
-  -- carrying a newer id (e.g. 1107253) were never recognised as Onyx and their
-  -- auction price never resolved ("No AH result").
-  if compactText(record.cargoName) == "Auroran Cargo" then
-    return true
+  -- The item-type id captured from the sale event is the most reliable signal:
+  -- when it is present and names a different item (e.g. Dragon Essence
+  -- Stabilizer), the record is not Onyx no matter what the name fields say.
+  local itemType = tonumber(record.payoutItemType)
+  if itemType and itemType > 0 then
+    return itemType == ONYX_ITEM_TYPE or ONYX_LEGACY_ITEM_TYPES[itemType] == true
   end
 
   local name = tostring(record.payoutName or ""):lower()
-  return name == tostring(ONYX_ITEM_TYPE) or name:find("onyx", 1, true) ~= nil
+  if name == tostring(ONYX_ITEM_TYPE) or name:find("onyx", 1, true) ~= nil then
+    return true
+  end
+
+  -- No item type and no usable name: old Auroran Cargo records predate payout
+  -- tracking and were always Onyx.
+  if compactText(record.cargoName) == "Auroran Cargo" then
+    local compactName = compactText(record.payoutName)
+    return compactName == "" or tonumber(compactName) ~= nil
+  end
+
+  return false
 end
 
 resolvePayoutItemType = function(record)
@@ -2405,7 +2528,7 @@ resolvePayoutItemType = function(record)
     return itemType
   end
 
-  if isOnyxPayout(record) or record.cargoName == "Auroran Cargo" then
+  if isOnyxPayout(record) then
     record.payoutItemType = ONYX_ITEM_TYPE
     if not record.payoutName or tonumber(record.payoutName) then
       record.payoutName = ONYX_DISPLAY_NAME
@@ -2552,13 +2675,64 @@ recordPayoutValue = function(record)
     return moneyPayout
   end
 
-  local itemType = resolvePayoutItemType(record)
-  local price = getPrice(itemType, isOnyxPayout and isOnyxPayout(record))
   local payoutCount = effectivePayoutCount(record)
-  if not price or not payoutCount then
+  if not payoutCount then
     return nil
   end
-  return payoutCount * price
+
+  -- Prefer the per-record snapshot so a later auction price update never changes
+  -- the payout (and profit) of records that were already priced. Only fall back
+  -- to the live price when this record has not been snapshotted yet; this read is
+  -- intentionally non-mutating -- locking happens in trySnapshotPayoutValue.
+  local unit = tonumber(record.payoutUnitPriceCopper)
+  if not unit then
+    local itemType = resolvePayoutItemType(record)
+    unit = getPrice(itemType, isOnyxPayout and isOnyxPayout(record))
+  end
+  if not unit or unit <= 0 then
+    return nil
+  end
+  return payoutCount * unit
+end
+
+-- Lock this record's payout unit price the first time a valid price is known,
+-- mirroring trySnapshotMaterialCost on the cost side. Returns (locked, changed).
+trySnapshotPayoutValue = function(record)
+  if type(record) ~= "table" then
+    return false, false
+  end
+  -- Money payouts are already a fixed amount; nothing to price.
+  if tonumber(record.payoutCopper) then
+    return true, false
+  end
+  -- Already snapshotted: leave it untouched.
+  if tonumber(record.payoutUnitPriceCopper) then
+    return true, false
+  end
+
+  local itemType = resolvePayoutItemType(record)
+  local unit = getPrice(itemType, isOnyxPayout and isOnyxPayout(record))
+  if not unit or unit <= 0 then
+    return false, false
+  end
+
+  record.payoutUnitPriceCopper = unit
+  record.payoutPricedAt = nowSeconds()
+  return true, true
+end
+
+tryCompletePayoutValues = function()
+  local changed = false
+  for _, record in ipairs(state.records) do
+    if not tonumber(record.payoutUnitPriceCopper) and not tonumber(record.payoutCopper) then
+      local _, recordChanged = trySnapshotPayoutValue(record)
+      changed = changed or recordChanged
+    end
+  end
+  if changed then
+    saveState()
+  end
+  return changed
 end
 
 local function recordPayoutText(record)
@@ -2861,6 +3035,29 @@ local function updateHistoryWindow()
   ui.historyStats.favorite:SetText("Favourite pack: " .. fitDisplayText(stats.favoritePack, 30))
   ui.historyStats.average:SetText("Average Pack Profit: " .. stats.averageProfitText)
   ui.historyStats.dailyProfit:SetText("Daily Profit (UTC-2): " .. stats.dailyProfitText)
+
+  if ui.dailyHistoryRows then
+    local dayKeys = {}
+    for k in pairs(historyState.dailyHistory or {}) do
+      table.insert(dayKeys, k)
+    end
+    table.sort(dayKeys, function(a, b) return a > b end)
+    for i = 1, MAX_DAILY_HISTORY_ROWS do
+      local lbl = ui.dailyHistoryRows[i]
+      if not lbl then break end
+      local dk = dayKeys[i]
+      if dk then
+        local d = historyState.dailyHistory[dk]
+        local profitText = formatMoney(d.profitCopper or 0)
+        if (d.unknownCount or 0) > 0 then
+          profitText = profitText .. " (+" .. tostring(d.unknownCount) .. " unpriced)"
+        end
+        lbl:SetText(dayKeyLabel(dk) .. ": " .. profitText)
+      else
+        lbl:SetText("")
+      end
+    end
+  end
 end
 
 local function createPopupWindow(name, width, height, anchorTarget, skipAnchor)
@@ -3004,7 +3201,19 @@ local function createHistoryWindow()
     styleText(label, TEXT_BROWN, ALIGN_CENTER or CENTER)
   end
 
-  makeButton("TradePacksHistoryResetStatistics", parent, 108, 222, 144, 30, "Reset Statistics", function()
+  makeSeparator("TradePacksHistorySeparator2", parent, 24, 210, HISTORY_WIDTH - 48)
+
+  local breakdownHeader = makeLabel("TradePacksHistoryBreakdownHeader", parent, 34, 226, HISTORY_WIDTH - 68, 20, "Daily Breakdown:")
+  styleText(breakdownHeader, TEXT_BROWN, ALIGN_LEFT or LEFT)
+
+  ui.dailyHistoryRows = {}
+  for i = 1, MAX_DAILY_HISTORY_ROWS do
+    local lbl = makeLabel("TradePacksHistoryDayRow" .. tostring(i), parent, 34, 226 + i * 22, HISTORY_WIDTH - 68, 20, "")
+    styleText(lbl, TEXT_BROWN, ALIGN_LEFT or LEFT)
+    ui.dailyHistoryRows[i] = lbl
+  end
+
+  makeButton("TradePacksHistoryResetStatistics", parent, 108, 400, 144, 30, "Reset Statistics", function()
     showResetConfirmation()
   end)
 
@@ -3080,6 +3289,30 @@ local function materialDetailText(material)
   return string.format("%dx %s @ %s = %s", tonumber(material.count) or 0, material.name or "?", unitText, totalText)
 end
 
+local function formatTimestamp(seconds)
+  seconds = tonumber(seconds)
+  if not seconds or seconds <= 0 then
+    return nil
+  end
+  if os and type(os.date) == "function" then
+    local ok, text = pcall(function()
+      return os.date("%Y-%m-%d %H:%M", seconds)
+    end)
+    if ok and type(text) == "string" then
+      return text
+    end
+  end
+  return nil
+end
+
+local function soldAtDetailText(record)
+  local text = formatTimestamp(record and record.soldAt)
+  if not text then
+    return nil
+  end
+  return "Turned in: " .. text
+end
+
 local function updateDetailPanel(records, startIndex)
   if not ui.detailTitle then
     return
@@ -3109,26 +3342,27 @@ local function updateDetailPanel(records, startIndex)
   local combinedLine = payoutText .. "   " .. costText
   local combinedColor = selected.costStatus == "unknown" and TEXT_RED or TEXT_BROWN
   setDetailLine(1, combinedLine, combinedColor)
+  setDetailLine(2, soldAtDetailText(selected) or "")
 
   local materials = ensureRecordMaterials(selected)
   if not materials then
     if selected.costStatus == "preset" then
-      setDetailLine(2, "Preset cost is used for this cargo.")
+      setDetailLine(3, "Preset cost is used for this cargo.")
     else
-      setDetailLine(2, "Recipe data is missing for this pack.", TEXT_RED)
+      setDetailLine(3, "Recipe data is missing for this pack.", TEXT_RED)
     end
-    for index = 3, DETAIL_LINE_COUNT do
+    for index = 4, DETAIL_LINE_COUNT do
       setDetailLine(index, "")
     end
     return
   end
 
-  local maxMaterials = DETAIL_LINE_COUNT - 1
+  local maxMaterials = DETAIL_LINE_COUNT - 2
   local shown = math.min(#materials, maxMaterials)
   for index = 1, shown do
-    setDetailLine(index + 1, materialDetailText(materials[index]))
+    setDetailLine(index + 2, materialDetailText(materials[index]))
   end
-  for index = shown + 2, DETAIL_LINE_COUNT do
+  for index = shown + 3, DETAIL_LINE_COUNT do
     setDetailLine(index, "")
   end
 end
@@ -3179,6 +3413,7 @@ refreshUi = function()
   sortRecords()
   local records = filteredRecords()
   local pageCount = math.max(1, math.ceil(#records / ROW_COUNT))
+  runtime.pageCount = pageCount
   if runtime.page > pageCount then
     runtime.page = pageCount
   end
@@ -3341,7 +3576,7 @@ local function createUi()
     ui.loadingLabel.style:SetOutline(true)
   end)
   ui.loadingLabel:Show(false)
-  ui.pageLabel = makeLabel("TradePacksPageLabel", parent, 481, 708, 78, 22, "Page 1/1")
+  ui.pageLabel = makeLabel("TradePacksPageLabel", parent, 474, 726, 78, 22, "Page 1/1")
   styleText(ui.pageLabel, TEXT_BROWN, ALIGN_CENTER or CENTER)
   makeSeparator("TradePacksTopSeparator", parent, 24, 94, 552)
 
@@ -3428,18 +3663,26 @@ local function createUi()
     styleText(ui.detailLines[i], TEXT_BROWN, ALIGN_CENTER or CENTER)
   end
 
-  makeButton("TradePacksHistoryButton", parent, 31, 708, 82, 24, "history", function()
+  makeButton("TradePacksHistoryButton", parent, 31, 726, 82, 24, "history", function()
     showHistoryWindow()
   end)
-  makeButton("TradePacksClearPaid", parent, 122, 708, 82, 24, "Clear Paid", function()
+  makeButton("TradePacksClearPaid", parent, 122, 726, 82, 24, "Clear Paid", function()
     clearPaidRecords()
   end)
-  makeTextButton("TradePacksPrevPage", parent, 448, 709, 24, 20, "<", function()
+  makeTextButton("TradePacksFirstPage", parent, 418, 726, 26, 22, "<<", function()
+    runtime.page = 1
+    refreshUi()
+  end)
+  makeTextButton("TradePacksPrevPage", parent, 446, 726, 26, 22, "<", function()
     runtime.page = runtime.page - 1
     refreshUi()
   end)
-  makeTextButton("TradePacksNextPage", parent, 565, 709, 24, 20, ">", function()
+  makeTextButton("TradePacksNextPage", parent, 554, 726, 26, 22, ">", function()
     runtime.page = runtime.page + 1
+    refreshUi()
+  end)
+  makeTextButton("TradePacksLastPage", parent, 582, 726, 26, 22, ">>", function()
+    runtime.page = runtime.pageCount or 999
     refreshUi()
   end)
 
@@ -3582,6 +3825,27 @@ local function createUi()
 end
 
 migrateHistoryFromRecords()
+-- Backfill payout names from the captured item type when the name is missing or
+-- numeric (covers records repaired by the startup migration after being
+-- mislabelled "Onyx").
+;(function()
+  for _, record in ipairs(state.records) do
+    local payoutName = compactText(record.payoutName)
+    if record.payoutItemType and (payoutName == "" or tonumber(payoutName)) then
+      local realName = getItemNameByType(record.payoutItemType)
+      if realName and realName ~= "" then
+        record.payoutName = realName
+      end
+    end
+  end
+end)()
+-- Backfill payout snapshots for records saved before per-record payout pricing
+-- existed. They have no payoutUnitPriceCopper, so lock them at the currently
+-- known price now to stop a future Onyx price update from retroactively shifting
+-- their profit. Records still lacking a resolvable price lock on the next lookup.
+if tryCompletePayoutValues then
+  tryCompletePayoutValues()
+end
 createUi()
 
 TradePacksLedger = {
