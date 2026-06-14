@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.1.2] - 2026-06-12
+
+### Fixed
+- **Wrong payout prices from unrelated auction searches** — Auction events triggered by the player's own auction-house activity (manual searches, browsing) were attributed to arbitrary pending price lookups, so item payouts (e.g. Dragon Essence Stabilizer) could be priced and locked at the cheapest listing of a completely unrelated item. The addon now only reads search results for searches it issued itself, and only stores lowest-price events that explicitly name the item. A one-time repair unlocks contaminated payout prices on unpaid records and purges the bad cached prices; PAID records keep their final profit.
+- **Numeric payout names** — Records showing the raw item-type id (e.g. "127211") instead of the item name now resolve the real name from the id at display time as well as on load.
+- **Onyx item-type detection** — The real Onyx auction item type is 32103; the large ids previously chased across "patches" (979983, 1107253, 1001195) are per-item instance ids the sale event leaks into the name/type fields. 32103 is now recognized, so Auroran Cargo turned in for Onyx displays "Onyx" again and gets the Onyx price sanity range applied.
+- **Dragon Essence Stabilizer name and search** — Item type 32106 maps to "Dragon Essence Stabilizer" via a built-in name table (the client API fails to resolve it), enabling both correct display and the auction-house name-search fallback instead of relying on lowest-price events alone.
+
+- **Queued searches dying with "No response"** — The 8-second response timeout started at refresh time for every lookup, so any search queued behind the first (e.g. Dragon Essence Stabilizer behind Onyx) timed out before its turn. The timeout now only ticks while a lookup's own search is active. Consecutive searches are also spaced 2 seconds apart, since the client silently drops a search fired immediately after the previous one.
+
+### Removed
+- **Leftover debug record** — Removed a debug block that injected a fake "Auroran Cargo / Dragon Essence Stabilizer" record (with a wrong hardcoded item id) into the ledger on every load. The injected record is deleted from saved data.
+
 ## [1.1.1] - 2026-06-11
 
 ### Fixed

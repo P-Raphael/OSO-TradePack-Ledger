@@ -1,5 +1,5 @@
 local ADDON_NAME = "TradePacks"
-local ADDON_VERSION = "1.1.1"
+local ADDON_VERSION = "1.1.2"
 local SAVE_KEY = "TradePacksState"
 local HISTORY_SAVE_KEY = "TradePacksHistoryState"
 local OPENER_SAVE_KEY = "TradePacksOpenerPosition"
@@ -20,10 +20,15 @@ local ONYX_DISPLAY_NAME = "Onyx"
 local ONYX_AUCTION_SEARCH_NAME = "Onyx Archeum Essence"
 local ONYX_MIN_REASONABLE_UNIT_PRICE = 1 * 10000
 local ONYX_MAX_REASONABLE_UNIT_PRICE = 100 * 10000
--- The Onyx item-type id has changed across game patches; ids the client used in
--- earlier patches still appear on old records and must keep resolving as Onyx.
-local ONYX_LEGACY_ITEM_TYPES = {
-  [1107253] = true
+-- Every id ever seen on an Onyx payout must keep resolving as Onyx. 32103 is the
+-- real auction item type (captured as refundItemType since v1.1.1). The large
+-- ids are per-item instance ids that older sale events put in the type/name
+-- fields; they vary per drop, which is why they appeared to "change per patch".
+local ONYX_ITEM_TYPES = {
+  [ONYX_ITEM_TYPE] = true,
+  [32103] = true,
+  [1107253] = true,
+  [1001195] = true
 }
 local LEDGER_WIDTH = 610
 local LEDGER_HEIGHT = 762
@@ -293,8 +298,7 @@ for _, record in ipairs(state.records) do
       or tonumber(existingName) ~= nil
     local itemType = tonumber(record.payoutItemType)
     local typeIsOnyx = itemType == nil
-      or itemType == ONYX_ITEM_TYPE
-      or ONYX_LEGACY_ITEM_TYPES[itemType] == true
+      or ONYX_ITEM_TYPES[itemType] == true
     if nameIsOnyx and typeIsOnyx then
       record.payoutItemType = record.payoutItemType or ONYX_ITEM_TYPE
       record.payoutName = record.payoutName or ONYX_DISPLAY_NAME
@@ -335,41 +339,26 @@ do
   state.records = cleaned
 end
 
-do -- TEST MOCK: Auroran Cargo / Dragon Essence Stabilizer price lookup check
-  local DES_ITEM_TYPE = 32106
-  local mock = nil
-  for _, r in ipairs(state.records) do
-    if r.cargoName == "Auroran Cargo" and r.payoutName == "Dragon Essence Stabilizer" then
-      mock = r
-      break
+if not state.settings.removedDebugMockRecord then
+  -- One-time removal of the fake record a leftover debug block (removed in
+  -- v1.1.2) injected on every load, identified by the exact field combination
+  -- the debug code wrote. Must only ever run once: 32106 is the REAL Dragon
+  -- Essence Stabilizer item type, so once genuine records get their names
+  -- backfilled they would match this filter too.
+  state.settings.removedDebugMockRecord = true
+  local cleaned = {}
+  for _, record in ipairs(state.records) do
+    local isInjectedMock = record.cargoName == "Auroran Cargo"
+      and record.payoutName == "Dragon Essence Stabilizer"
+      and tonumber(record.payoutItemType) == 32106
+      and record.payoutCount == 1
+      and record.cargoItemType == nil
+      and not record.paid
+    if not isInjectedMock then
+      cleaned[#cleaned + 1] = record
     end
   end
-  if mock then
-    -- Repair a mock saved before the Onyx migration fix: force the real item
-    -- type and unlock any payout price snapshotted from the Onyx lookup.
-    if tonumber(mock.payoutItemType) ~= DES_ITEM_TYPE then
-      mock.payoutItemType = DES_ITEM_TYPE
-      mock.payoutUnitPriceCopper = nil
-      mock.payoutPricedAt = nil
-    end
-  else
-    local now = os.time()
-    table.insert(state.records, {
-      id = state.nextId,
-      cargoName = "Auroran Cargo",
-      payoutName = "Dragon Essence Stabilizer",
-      payoutItemType = DES_ITEM_TYPE,
-      payoutCount = 1,
-      soldAt = now,
-      dayKeyUtc2 = math.floor((now - 2 * 3600) / 86400),
-      delaySeconds = DEFAULT_DELAY_SECONDS,
-      costCopper = 260000,
-      costStatus = "preset",
-      costSource = "preset",
-      paid = false,
-    })
-    state.nextId = state.nextId + 1
-  end
+  state.records = cleaned
 end
 
 local lastSavedChunkCount = recordChunkCount or 0
@@ -693,7 +682,7 @@ local function getPrice(itemType, forceOnyxLimit)
   if type(entry) == "table" then
     local copper = tonumber(entry.copper)
     if copper and copper > 0 then
-      if forceOnyxLimit or tonumber(itemType) == ONYX_ITEM_TYPE then
+      if forceOnyxLimit or ONYX_ITEM_TYPES[tonumber(itemType)] == true then
         if copper < ONYX_MIN_REASONABLE_UNIT_PRICE or copper > ONYX_MAX_REASONABLE_UNIT_PRICE then
           return nil
         end
@@ -741,9 +730,20 @@ local function getItemType(info)
   return info.itemType or info.type
 end
 
+-- Payout item types whose names the client API fails to resolve in-game.
+local KNOWN_ITEM_NAMES = {
+  [32106] = "Dragon Essence Stabilizer"
+}
+
 local function getItemNameByType(itemType)
   itemType = tonumber(itemType)
-  if not itemType or itemType <= 0 or not X2Item or type(X2Item.GetItemInfoByType) ~= "function" then
+  if not itemType or itemType <= 0 then
+    return nil
+  end
+  if KNOWN_ITEM_NAMES[itemType] then
+    return KNOWN_ITEM_NAMES[itemType]
+  end
+  if not X2Item or type(X2Item.GetItemInfoByType) ~= "function" then
     return nil
   end
 
@@ -1590,7 +1590,7 @@ local function lookupIsOnyx(lookup)
   if type(lookup) ~= "table" then
     return false
   end
-  if tonumber(lookup.itemType) == ONYX_ITEM_TYPE then
+  if ONYX_ITEM_TYPES[tonumber(lookup.itemType)] == true then
     return true
   end
 
@@ -1599,7 +1599,7 @@ local function lookupIsOnyx(lookup)
 end
 
 local function isOnyxAuctionLookup(itemType)
-  if tonumber(itemType) == ONYX_ITEM_TYPE then
+  if ONYX_ITEM_TYPES[tonumber(itemType)] == true then
     return true
   end
 
@@ -1706,6 +1706,13 @@ processNextAuctionSearch = function()
     return false
   end
 
+  -- The client silently drops an auction search fired right after the previous
+  -- one, so the second queued search would never get a response. Keep a gap;
+  -- updateAuctionLookups pumps the queue again once it has passed.
+  if runtime.lastSearchSentAt and nowSeconds() - runtime.lastSearchSentAt < 2 then
+    return #runtime.auctionQueue > 0
+  end
+
   while #runtime.auctionQueue > 0 do
     local key = table.remove(runtime.auctionQueue, 1)
     local lookup = runtime.namePriceLookups[key]
@@ -1715,9 +1722,16 @@ processNextAuctionSearch = function()
         X2Auction:SearchAuctionArticle(1, 0, 55, AUCTION_GRADE_NORMAL, 0, false, lookup.searchName, "0", "99999999999")
       end)
       if ok then
+        runtime.lastSearchSentAt = nowSeconds()
         lookup.startedAt = nowSeconds()
         lookup.elapsed = 0
         lookup.lastTry = 0
+        -- Restart the response timeout: it may have been ticking while this
+        -- lookup sat in the queue behind other searches.
+        if runtime.priceLookups[key] then
+          runtime.priceLookups[key].elapsed = 0
+          runtime.priceLookups[key].lastTry = 0
+        end
         runtime.activeAuctionKey = key
         runtime.lastAuctionSearchKey = key
         setAuctionLoading(true)
@@ -1909,9 +1923,12 @@ local function updateAuctionLookups(elapsed)
   elapsed = normalizedElapsed(elapsed)
 
   for key, lookup in pairs(runtime.priceLookups) do
-    local waitingForQueuedSearch = runtime.namePriceLookups[key] and runtime.activeAuctionKey ~= key and not lookup.itemType
+    -- While this lookup's search is queued behind another, pause its response
+    -- timeout: it used to keep ticking from the moment of the refresh, so every
+    -- search after the first died with "No response" before getting its turn.
+    local waitingForQueuedSearch = runtime.namePriceLookups[key] and runtime.activeAuctionKey ~= key
     if waitingForQueuedSearch then
-      -- This lookup has not been sent yet; the active search will advance the queue.
+      -- This lookup has not been sent yet; the queue pump below will start it.
     else
     lookup.elapsed = (lookup.elapsed or 0) + elapsed
     local searchLookup = runtime.namePriceLookups[key]
@@ -1932,6 +1949,14 @@ local function updateAuctionLookups(elapsed)
       lookup.lastTry = lookup.elapsed
       queryAuctionPrice(lookup.itemType, lookup.searchName, false, key)
     end
+    end
+  end
+
+  -- Pump the search queue: with the send-gap throttle, a queued search may not
+  -- have been started by the previous search's completion handler.
+  if not runtime.activeAuctionKey and #runtime.auctionQueue > 0 then
+    if processNextAuctionSearch() then
+      setAuctionLoading(true)
     end
   end
 end
@@ -2500,11 +2525,11 @@ isOnyxPayout = function(record)
   -- Stabilizer), the record is not Onyx no matter what the name fields say.
   local itemType = tonumber(record.payoutItemType)
   if itemType and itemType > 0 then
-    return itemType == ONYX_ITEM_TYPE or ONYX_LEGACY_ITEM_TYPES[itemType] == true
+    return ONYX_ITEM_TYPES[itemType] == true
   end
 
   local name = tostring(record.payoutName or ""):lower()
-  if name == tostring(ONYX_ITEM_TYPE) or name:find("onyx", 1, true) ~= nil then
+  if ONYX_ITEM_TYPES[tonumber(name)] == true or name:find("onyx", 1, true) ~= nil then
     return true
   end
 
@@ -2626,6 +2651,8 @@ resolveRecordIcon = function(record)
   return nil
 end
 
+runtime.unresolvableNameTypes = {}
+
 local function payoutDisplayName(record)
   if tonumber(record and record.payoutCopper) then
     return "Money"
@@ -2633,7 +2660,24 @@ local function payoutDisplayName(record)
   if isOnyxPayout(record) then
     return ONYX_DISPLAY_NAME
   end
-  return record.payoutName or "Payout"
+  -- Sale events sometimes capture the raw item-type id where the name should
+  -- be; resolve the real name from the id rather than displaying the number.
+  local name = compactText(record and record.payoutName)
+  if name == "" or tonumber(name) then
+    local itemType = tonumber(record and record.payoutItemType)
+    if itemType and not runtime.unresolvableNameTypes[itemType] then
+      local realName = getItemNameByType(itemType)
+      if realName and realName ~= "" then
+        record.payoutName = realName
+        return realName
+      end
+      runtime.unresolvableNameTypes[itemType] = true
+    end
+  end
+  if name ~= "" then
+    return name
+  end
+  return "Payout"
 end
 
 payoutSearchName = function(record)
@@ -2645,7 +2689,9 @@ payoutSearchName = function(record)
   if name ~= "" and not tonumber(name) then
     return name
   end
-  return nil
+  -- The recorded name is missing or a raw id; a resolved item name still allows
+  -- the auction search fallback instead of relying on lowest-price events only.
+  return getItemNameByType(record and record.payoutItemType)
 end
 
 effectivePayoutCount = function(record)
@@ -2816,7 +2862,10 @@ local function auctionResultMatchesLookup(itemInfo, lookup, price)
     local itemName = compactText(itemInfo and itemInfo.name):lower()
     local lookupItemType = tonumber(lookup and lookup.itemType)
     local resultItemType = tonumber(itemInfo and (itemInfo.itemType or itemInfo.type))
-    if itemName ~= "" and itemName ~= searchName and (not lookupItemType or lookupItemType ~= resultItemType) then
+    local typeMatches = lookupItemType ~= nil and lookupItemType == resultItemType
+    -- Results with no readable name used to pass unconditionally, letting stale
+    -- results from a previous (possibly user-made) search slip through.
+    if itemName ~= searchName and not typeMatches then
       return false
     end
   end
@@ -2863,34 +2912,15 @@ local function searchedAuctionPrice(itemInfo, lookup)
   return bestPrice
 end
 
-local function activeAuctionLookup()
-  if runtime.activeAuctionKey and runtime.namePriceLookups[runtime.activeAuctionKey] then
-    return runtime.activeAuctionKey, runtime.namePriceLookups[runtime.activeAuctionKey]
-  end
-  local key = runtime.lastAuctionSearchKey
-  if key and runtime.namePriceLookups[key] then
-    return key, runtime.namePriceLookups[key]
-  end
-  for lookupKey, lookup in pairs(runtime.namePriceLookups) do
-    return lookupKey, lookup
-  end
-  for lookupKey, lookup in pairs(runtime.priceLookups) do
-    return lookupKey, lookup
-  end
-  return nil, nil
-end
-
 handleLowestPrice = function(itemType, grade, price)
   if price == nil then
     return
   end
 
+  -- This event also fires for lowest-price requests made by the game's own
+  -- auction UI. Only store prices the event explicitly attributes to an item;
+  -- guessing the item from a pending lookup priced unrelated items in the past.
   local parsedItemType = tonumber(itemType)
-  if not parsedItemType then
-    local _, lookup = activeAuctionLookup()
-    parsedItemType = lookup and lookup.itemType
-  end
-
   if parsedItemType then
     storeAuctionPrice(parsedItemType, grade, price)
   end
@@ -2942,7 +2972,15 @@ readSearchedAuctionResults = function(key, lookup, markNoResult)
 end
 
 handleAuctionItemSearched = function()
-  local key, lookup = activeAuctionLookup()
+  -- This event also fires when the user searches the auction house themselves.
+  -- Only read the results while one of this addon's own searches is in flight;
+  -- otherwise an arbitrary pending lookup would absorb the price of whatever
+  -- unrelated item the user searched for.
+  local key = runtime.activeAuctionKey
+  local lookup = key and runtime.namePriceLookups[key]
+  if not lookup then
+    return
+  end
   readSearchedAuctionResults(key, lookup, true)
 end
 
@@ -3825,6 +3863,33 @@ local function createUi()
 end
 
 migrateHistoryFromRecords()
+-- One-time v1.1.2 repair: auction events fired by the user's own auction-house
+-- activity used to be attributed to arbitrary pending lookups, storing unrelated
+-- items' prices on item payouts (e.g. Dragon Essence Stabilizer priced at the
+-- cheapest listing of whatever was searched). Unlock those snapshots on unpaid
+-- records and purge the cached prices so they re-fetch cleanly. Onyx payouts are
+-- excluded: they are range-guarded and repaired by the startup migration. PAID
+-- records stay locked; their profit is final.
+;(function()
+  if state.settings.repairedContaminatedPayouts then
+    return
+  end
+  state.settings.repairedContaminatedPayouts = true
+  for _, record in ipairs(state.records) do
+    if not record.paid
+      and not tonumber(record.payoutCopper)
+      and tonumber(record.payoutUnitPriceCopper)
+      and not isOnyxPayout(record) then
+      record.payoutUnitPriceCopper = nil
+      record.payoutPricedAt = nil
+      local key = normalizeKey(tonumber(record.payoutItemType))
+      if key then
+        state.prices[key] = nil
+      end
+    end
+  end
+  saveState()
+end)()
 -- Backfill payout names from the captured item type when the name is missing or
 -- numeric (covers records repaired by the startup migration after being
 -- mislabelled "Onyx").
