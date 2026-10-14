@@ -31,13 +31,17 @@ function Widget:AddAnchor(...)
   self.anchors = self.anchors or {}
   self.anchors[#self.anchors + 1] = self.anchor
   if self.anchor[2] == "UIParent" then self.x, self.y = self.anchor[3], self.anchor[4] end
-  if self.anchor[1] == "TOPRIGHT" and self.anchor[3] == "TOPRIGHT" and #self.anchors == 2 then
+  if self.anchor[1] == "TOPLEFT" and self.anchor[3] == "TOPLEFT" then self.x, self.y = self.anchor[4], self.anchor[5] end
+  if self.anchor[1] == "TOPRIGHT" and #self.anchors == 2 then
     self.x, self.y = self.anchors[1][4], self.anchors[1][5]
-    self.width = self.anchor[2].width + self.anchor[4] - self.x
+    local edge = self.anchor[3] == "TOPRIGHT" and self.anchor[2].width or self.anchor[2].x
+    self.width = edge + self.anchor[4] - self.x
   end
   self.anchorCalls = (rawget(self, "anchorCalls") or 0) + 1
 end
 function Widget:SetColor(...) self.color = {...} end
+function Widget:ClearPoints() self.points = {} end
+function Widget:SetPoints(points) self.points = points end
 function Widget:StartMoving() self.moving = true end
 function Widget:StopMovingOrSizing() self.moving = false end
 local function label(name, parent, x, y, width, height, text)
@@ -53,6 +57,7 @@ end
 UIParent = {GetScreenWidth = function() return screenWidth end, GetScreenHeight = function() return screenHeight end}
 DC_ALWAYS = 1
 ALIGN_LEFT = "left"
+ALIGN_RIGHT = "right"
 local Watch = {}
 Watch.__index = Watch
 function Watch:saveSettings() writes = writes + 1 end
@@ -128,7 +133,7 @@ assert(graph.legends[2].detail.text:find("Solzreed", 1, true))
 assert(graph.legends[1].detail.text:find("130.0%", 1, true))
 assert(graph.legends[2].detail.text:find("3m ago stale", 1, true))
 assert(graph.legends[1].name.style.color[1] ~= graph.legends[2].name.style.color[1])
-assert(graph.height == 366 and graph.status.anchor[4] == 344)
+assert(graph.height == 366 and graph.status.y == 344)
 assert(graph.subtitle.text == "1h | UTC-3 | shared scale")
 local anchorCalls, beforeWrites = graph.window.anchorCalls, writes
 for _ = 1, 5 do watch:renderCombinedGraph(); watch:syncCombinedGraph(); watch:renderCombinedStatus() end
@@ -344,4 +349,64 @@ for _, font in ipairs({10, 12, 14}) do
     assert(graph.width == 320, "two-line labels widened the graph")
   end
 end
-print("PASS: combined transparent graph lifecycle, bounded stacked prices, per-route legends, shared bounds, missing data, and saved position")
+-- Current rates follow plot coordinates. Close/equal labels stay distinct
+-- while their colored guides retain the exact rate position.
+settings.metric = "rate"
+watch.comparisonData = {entry("a", "A", "Route A", 125, now), entry("b", "B", "Route B", 119, now),
+  entry("c", "C", "Route C", 125, now)}
+for _, compact in ipairs({true, false}) do
+  for _, height in ipairs({80, 170, 300}) do
+    settings.combinedStyle = {width = 560, plotHeight = height, compact = compact}
+    watch:renderCombinedGraph()
+    for i, data in ipairs(watch.comparisonData) do
+      local label, rate = graph.currentRates[i], data.quote.ratio
+      local expected = height * (1 - (rate - graph.lowValue) / (graph.highValue - graph.lowValue))
+      assert(label.visible and label.anchor[1] == "LEFT" and label.anchor[2] == graph.chart.plot
+        and label.anchor[3] == "TOPLEFT", "current rate label does not follow the plot")
+      assert(label.anchor[4] == graph.chart.width + 10)
+      local guide = graph.currentRateGuides[i]
+      if math.abs(label.anchor[5] - expected) > 0.5 then
+        assert(guide.visible and math.abs(guide.points[1].beginY - (height - expected)) < 1e-8
+          and math.abs(guide.points[1].endY - (height - label.anchor[5])) < 1e-8,
+          "displaced label lost the guide to its exact rate")
+      else assert(not guide.visible) end
+    end
+    local centers = {}
+    for _, label in ipairs(graph.currentRates) do if label.visible then centers[#centers + 1] = label.anchor[5] end end
+    table.sort(centers)
+    for i = 2, #centers do assert(centers[i] - centers[i - 1] >= 18 - 1e-8, "percentage labels overlap") end
+    watch.comparisonData[2].quote.ratio = watch.comparisonData[2].quote.ratio + 0.5
+  end
+end
+watch.comparisonData = {}
+for i = 1, 6 do watch.comparisonData[i] = entry(tostring(i), "Pack " .. i, "Route", 130, now) end
+settings.combinedStyle = {width = 320, plotHeight = 80, compact = true, font = 14}
+watch:renderCombinedGraph()
+local centers = {}
+for _, label in ipairs(graph.currentRates) do
+  assert(label.visible and label.anchor[5] >= 9 and label.anchor[5] <= graph.chart.height - 9)
+  centers[#centers + 1] = label.anchor[5]
+end
+table.sort(centers)
+for i = 2, #centers do assert(centers[i] - centers[i - 1] >= 20 - 1e-8) end
+for _, width in ipairs({320, 560, 900}) do
+  settings.combinedStyle = {width = width, plotHeight = 170}
+  for _, mode in ipairs({"current", "off", "272000", "332000"}) do
+    settings.proficiencyMode = mode
+    watch:renderCombinedGraph()
+    local expected = mode == "current" and (width == 320 and "Live" or "Current")
+      or mode == "off" and "OFF" or mode == "272000" and "272k" or "332k"
+    assert(graph.proficiencyLabel.text == "Prof: " .. expected, "footer lost the selected proficiency mode")
+    assert(graph.status.style.align == "right" and graph.proficiencyLabel.style.align == "left")
+    assert(graph.proficiencyLabel.anchor[3] + graph.proficiencyWidth < graph.status.x,
+      "footer proficiency overlaps the update status")
+    assert(graph.status.x + graph.status.width == width - 48, "countdown does not reserve the resize handle")
+    assert(graph.resizeGrip.x - (graph.status.x + graph.status.width) >= 26,
+      "countdown overlaps the resize handle")
+    assert(#graph.status.anchors == 2 and graph.status.anchors[2][2] == graph.resizeGrip
+      and graph.status.anchors[2][3] == "TOPLEFT" and graph.status.anchors[2][4] == -26,
+      "status right edge is not bound directly before the resize handle")
+    assert(graph.status.autoResize == false and graph.status.style.ellipsis == true)
+  end
+end
+print("PASS: combined graph lifecycle, current rate alignment, proficiency footer, and saved position")

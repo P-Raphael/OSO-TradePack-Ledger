@@ -61,16 +61,18 @@ function TradePacksRateChart.install(Watch)
     if metric == "both" then metric = "rate" end
     local visible = finite(low) and finite(high) and high > low
     local signature = table.concat({metric, tostring(low), tostring(high), tostring(chart.width),
-      tostring(chart.height), tostring(chart.transparent), tostring(self.ctx.dark)}, "|")
+      tostring(chart.height), tostring(chart.transparent), tostring(self.ctx.dark), tostring(chart.axisFont)}, "|")
     if chart.axisSignature == signature then return end
     local ticks = chart.valueAxis or {}
     chart.valueAxis = ticks
     local values, step = {}, nil
     if visible then
-      local maxTicks = math.max(2, math.min(MAX_TICKS, math.floor(chart.height / 20) + 1))
-      step = niceStep(math.max(metric == "rate" and 10 or 0, (high - low) / (maxTicks - 1)))
+      local cap = metric == "rate" and 13 or MAX_TICKS
+      local spacing = metric == "rate" and math.max(22, (chart.axisFont or 11) + 8) or 20
+      local maxTicks = math.max(2, math.min(cap, math.floor(chart.height / spacing) + 1))
+      step = niceStep(math.max(metric == "rate" and 5 or 0, (high - low) / (maxTicks - 1)))
       local first = math.ceil(low / step - 1e-9) * step
-      for i = 0, MAX_TICKS - 1 do
+      for i = 0, cap - 1 do
         local value = first + i * step
         if value > high + step * 1e-8 then break end
         values[#values + 1] = value

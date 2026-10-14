@@ -64,12 +64,26 @@ function TradePacksRateCombined.install(Watch)
     pcall(function() label:SetAutoResize(false) end)
     pcall(function() label.style:SetEllipsis(true) end)
     label:SetText(self:fitGraphLabel(label, text, width, font, tail))
+    local footer = self.graphFooterBounds and self.graphFooterBounds[label]
     local bounds = self.graphLegendBounds and self.graphLegendBounds[label]
-    if bounds then
+    if footer then self:anchorGraphStatus(footer.graph, footer.left)
+    elseif bounds then
       -- Keep text left-aligned and bind both edges to the window, rather than
       -- leaving a centered label's extent independent of its background.
       self:anchorGraphLegend(label, bounds.parent, bounds.y)
     else label:SetExtent(width, 18) end
+  end
+
+  function Watch:anchorGraphStatus(graph, left)
+    local label = graph.status
+    self.graphFooterBounds = self.graphFooterBounds or {}
+    self.graphFooterBounds[label] = {graph = graph, left = left}
+    pcall(function() label:SetAutoResize(false); label:SetInset(0, 0, 0, 0) end)
+    pcall(function() label.style:SetAlign(ALIGN_RIGHT or RIGHT); label.style:SetEllipsis(true) end)
+    label:RemoveAllAnchors()
+    label:AddAnchor("TOPLEFT", graph.window, "TOPLEFT", left, graph.height - 22)
+    label:AddAnchor("TOPRIGHT", graph.resizeGrip, "TOPLEFT", -26, -2)
+    label:SetHeight(18)
   end
 
   function Watch:ratePriceText(data)
@@ -78,6 +92,11 @@ function TradePacksRateCombined.install(Watch)
     local text = rate and string.format("%.1f%%", rate) or "rate unavailable"
     if price then return text .. " | ~" .. self.ctx.money(price) end
     return text .. " | " .. (data and data.pricing and not data.pricing.base and "no payout price" or "price unavailable")
+  end
+
+  function Watch:displayPackName(data)
+    return (data and self.settings.packAliases and self.settings.packAliases[data.id])
+      or (data and data.name) or "Choose a pack"
   end
 
   function Watch:fitGraphLabel(label, text, width, font, tail)
@@ -123,7 +142,8 @@ function TradePacksRateCombined.install(Watch)
     value = type(value) == "table" and value or {}
     return {width = math.max(320, math.min(1200, number(value.width) or (graph.combined and 560 or 440))),
       plotHeight = math.max(80, math.min(500, number(value.plotHeight) or (graph.combined and 170 or 120))),
-      compact = value.compact == true, font = (value.font == 10 or value.font == 14) and value.font or 12}
+      compact = value.compact == true, hideNames = value.hideNames == true,
+      font = (value.font == 10 or value.font == 14) and value.font or 12}
   end
 
   function Watch:saveGraphStyle(graph, style)
@@ -142,13 +162,27 @@ function TradePacksRateCombined.install(Watch)
     local bothValues = self.settings.showRatePrice or self.settings.metric == "both"
     local stacked = bothValues or self.settings.metric == "price" or self.settings.metric == "profit"
     local legendStep = compact and not stacked and 20 or 36
-    local plotY = compact and (not graph.combined and bothValues and 50 or 28) or graph.combined and 55 or 72
+    local rateCount = 0
+    if graph.combined and self.settings.metric == "rate" then
+      for _, data in ipairs(self.comparisonData or {}) do
+        if data.quote and number(data.quote.ratio) then rateCount = rateCount + 1 end
+      end
+    end
+    if rateCount > 0 then plotHeight = math.max(plotHeight, (rateCount - 1) * (style.font + 6) + 18) end
+    local plotY = style.hideNames and 28 or compact and (not graph.combined and bothValues and 50 or 28)
+      or graph.combined and 55 or 72
     local legendY = plotY + plotHeight + 31
-    local height = graph.combined and (legendY + count * legendStep + (compact and 28 or 38))
-      or plotY + plotHeight + (compact and 48 or 72)
+    local height = graph.combined and (legendY + (style.hideNames and 0 or count * legendStep)
+      + ((compact or style.hideNames) and 28 or 38))
+      or plotY + plotHeight + ((compact or style.hideNames) and 48 or 72)
     local dual = self.settings.metric == "both"
-    local signature = table.concat({width, plotHeight, height, tostring(compact), style.font, tostring(dual)}, ":")
+    local rateGutter = rateCount > 0 and 54 or 0
+    local signature = table.concat({width, plotHeight, height, tostring(compact), style.font,
+      tostring(dual), rateGutter, tostring(style.hideNames)}, ":")
     graph.compact, graph.font, graph.stacked = compact, style.font, stacked
+    graph.hideNames = style.hideNames
+    graph.chart.axisFont = style.font
+    graph.plotY, graph.currentRateGutter = plotY, rateGutter
     if graph.periodButton then
       self:setGraphLabel(graph.periodButton, self:graphPeriodLabel(), 50, 12)
     end
@@ -167,17 +201,32 @@ function TradePacksRateCombined.install(Watch)
     place(graph.backgroundButton, width - 72, 0, 30)
     place(graph.close, width - 34, 0, 24)
     place(graph.resizeGrip, width - 22, height - 20, 22, 20)
+    graph.resizeGrip:RemoveAllAnchors()
+    graph.resizeGrip:AddAnchor("TOPLEFT", graph.window, "TOPLEFT", width - 22, height - 20)
     place(graph.colorButton, 10, height - 22, 48)
-    place(graph.status, 64, height - 22, width - 94)
+    if graph.combined then
+      local proficiencyWidth = math.min(150, math.max(112, math.floor((width - 94) * 0.4)))
+      graph.proficiencyWidth = proficiencyWidth
+      graph.statusWidth = width - 120 - proficiencyWidth
+      place(graph.proficiencyLabel, 64, height - 22, proficiencyWidth)
+      place(graph.status, 72 + proficiencyWidth, height - 22, graph.statusWidth)
+      self:anchorGraphStatus(graph, 72 + proficiencyWidth)
+    else
+      graph.statusWidth = width - 112
+      place(graph.status, 64, height - 22, graph.statusWidth)
+      self:anchorGraphStatus(graph, 64)
+    end
+    -- Keep 26 units clear before the resize handle, including outlined glyphs.
+    pcall(function() graph.status:EnablePick(false); graph.resizeGrip:Raise() end)
     place(graph.subtitle, 12, 25, width - 24)
-    if graph.subtitle then graph.subtitle:Show(not compact) end
+    if graph.subtitle then graph.subtitle:Show(not compact and not style.hideNames) end
     place(graph.routeLabel, 10, 22, width - 20)
     place(graph.quoteLabel, 10, 44, width - 20)
     place(graph.coverage, 10, height - 47, width - 20)
     for _, key in ipairs({"routeLabel", "quoteLabel", "coverage"}) do
-      if graph[key] then graph[key]:Show(not compact) end
+      if graph[key] then graph[key]:Show(not compact and not style.hideNames) end
     end
-    if not graph.combined and bothValues then
+    if not graph.combined and bothValues and not style.hideNames then
       place(graph.quoteLabel, 10, compact and 22 or 44, width - 20)
       graph.quoteLabel:Show(true)
     end
@@ -187,8 +236,9 @@ function TradePacksRateCombined.install(Watch)
       self:anchorGraphLegend(labels.detail, graph.window, legendY + (i - 1) * legendStep + 17)
     end
     local chart = graph.chart
-    place(chart.plot, 60, plotY, width - (dual and 132 or 80), plotHeight)
-    chart.width, chart.height = width - (dual and 132 or 80), plotHeight
+    local chartWidth = width - (dual and 132 or 80) - rateGutter
+    place(chart.plot, 60, plotY, chartWidth, plotHeight)
+    chart.width, chart.height = chartWidth, plotHeight
     for _, layer in ipairs(chart.layers) do
       if layer.line then layer.line:SetExtent(chart.width, chart.height) end
       layer.renderSignature = nil
@@ -207,13 +257,14 @@ function TradePacksRateCombined.install(Watch)
   function Watch:styleFloatingText(graph)
     local font = graph.font or 12
     local labels = {graph.title, graph.status}
-    for _, key in ipairs({"subtitle", "routeLabel", "quoteLabel", "coverage"}) do
+    for _, key in ipairs({"subtitle", "routeLabel", "quoteLabel", "coverage", "proficiencyLabel"}) do
       if graph[key] then labels[#labels + 1] = graph[key] end
     end
     for _, tick in ipairs(graph.ticks) do labels[#labels + 1] = tick end
     for _, tick in ipairs(graph.chart.valueAxis or {}) do labels[#labels + 1] = tick.label end
     for _, tick in ipairs(graph.chart.priceChart and graph.chart.priceChart.valueAxis or {}) do labels[#labels + 1] = tick.label end
     for _, entry in ipairs(graph.legends or {}) do labels[#labels + 1] = entry.name; labels[#labels + 1] = entry.detail end
+    for _, label in ipairs(graph.currentRates or {}) do labels[#labels + 1] = label end
     for _, label in ipairs(labels) do
       if graph.appliedFonts == nil then graph.appliedFonts = {} end
       if graph.appliedFonts[label] ~= font then
@@ -233,8 +284,7 @@ function TradePacksRateCombined.install(Watch)
     graph.periodButton = button("Period", "24h", function() self:showPeriodMenu(graph) end)
     graph.colorButton = button("Color", "Color", function() self:showColorMenu(graph) end)
     graph.textButton = button("Text", "Text", function()
-      local style = self:graphStyle(graph); style.compact = not style.compact
-      self:saveGraphStyle(graph, style); self:render()
+      self:showGraphTextMenu(graph)
     end)
     graph.fontButton = button("Font", "Aa", function()
       local style = self:graphStyle(graph); style.font = style.font == 12 and 14 or style.font == 14 and 10 or 12
@@ -392,7 +442,27 @@ function TradePacksRateCombined.install(Watch)
         detail = label("Detail" .. i, 20, LEGEND_Y + (i - 1) * LEGEND_STEP + 17, WIDTH - 40)
       }
     end
+    graph.currentRates, graph.currentRateGuides, graph.currentRateGeometry = {}, {}, {}
+    for i = 1, MAX_SERIES do
+      local current = label("CurrentRate" .. i, 0, 0, 54, "")
+      pcall(function()
+        current.style:SetFontSize(11); current.style:SetOutline(true); current:EnablePick(false)
+      end)
+      current:SetExtent(54, 16); current:Show(false)
+      graph.currentRates[i] = current
+      local guide = c.widget("line", prefix .. "CurrentRateGuide" .. i, graph.chart.plot,
+        0, 0, graph.chart.width + 8, graph.chart.height)
+      guide:EnablePick(false); guide:SetLineThickness(1); guide:Show(false)
+      graph.currentRateGuides[i] = guide
+    end
     graph.status = label("Status", 12, graph.height - 22, WIDTH - 24)
+    graph.proficiencyLabel = label("Proficiency", 64, graph.height - 22, 150, "Prof: Current")
+    pcall(function()
+      graph.proficiencyLabel.style:SetAlign(ALIGN_LEFT or LEFT)
+      graph.proficiencyLabel:SetInset(0, 0, 0, 0)
+      graph.status.style:SetAlign(ALIGN_RIGHT or RIGHT)
+      graph.status:SetInset(0, 0, 0, 0)
+    end)
     self:addGraphControls(graph, prefix)
     w:Show(false)
     return graph
@@ -414,7 +484,8 @@ function TradePacksRateCombined.install(Watch)
     for i, labels in ipairs(graph.legends) do
       local data = self.comparisonData and self.comparisonData[i]
       local visible = data ~= nil
-      labels.name:Show(visible); labels.detail:Show(visible and (not graph.compact or graph.stacked))
+      labels.name:Show(visible and not graph.hideNames)
+      labels.detail:Show(visible and not graph.hideNames and (not graph.compact or graph.stacked))
       if data then
         local color = graph.chart.layers[i] and graph.chart.layers[i].color or {1, 1, 1}
         pcall(function()
@@ -423,6 +494,8 @@ function TradePacksRateCombined.install(Watch)
         end)
         local cached = s.metric == "profit" and data.costs and data.costs.stalePrices
         local route = data.routeLabel or (tostring(data.from or "?") .. " > " .. tostring(data.to or "?"))
+        local custom = s.packAliases and s.packAliases[data.id]
+        local routeText = custom or (self:displayPackName(data) .. " > " .. route)
         local value = quoteText(data, s.metric, c.money)
         if s.showRatePrice or s.metric == "both" then value = self:ratePriceText(data) end
         local state = ageText(data.quote and data.quote.at, now, self.staleAfter and self:staleAfter() or 90)
@@ -431,7 +504,7 @@ function TradePacksRateCombined.install(Watch)
         if s.showRatePrice or s.metric == "both" then
           local rate = data.quote and number(data.quote.ratio)
           local rateText = rate and string.format("%.1f%%", rate) or "rate unavailable"
-          self:setGraphLabel(labels.name, tostring(i) .. ". " .. (data.name or "Choose a pack") .. " > " .. route,
+          self:setGraphLabel(labels.name, tostring(i) .. ". " .. routeText,
             width, font, " | " .. rateText)
           -- Keep the price first: a narrow chart may shorten the reading age,
           -- but must not reserve that space at the expense of the price.
@@ -440,15 +513,92 @@ function TradePacksRateCombined.install(Watch)
         elseif graph.compact and not graph.stacked then
           local tail = " | " .. value .. " | " .. state .. (cached and " | cached costs" or "")
           self:setGraphLabel(labels.name,
-            tostring(i) .. ". " .. (data.name or "Choose a pack") .. " > " .. route, width, font, tail)
+            tostring(i) .. ". " .. routeText, width, font, tail)
         else
-          self:setGraphLabel(labels.name, tostring(i) .. ". " .. (data.name or "Choose a pack"),
+          self:setGraphLabel(labels.name, tostring(i) .. ". " .. self:displayPackName(data),
             width, font, cached and " | cached costs" or "")
-          self:setGraphLabel(labels.detail, route, width, font, " | " .. value .. " | " .. state)
+          if custom then self:setGraphLabel(labels.detail, value .. " | " .. state, width, font)
+          else self:setGraphLabel(labels.detail, route, width, font, " | " .. value .. " | " .. state) end
         end
       end
     end
-    self:setGraphLabel(graph.status, self:refreshStatus() or "", (graph.width or WIDTH) - 94, graph.font or 12)
+    local mode = s.proficiencyMode or "current"
+    local proficiency = mode == "current" and "Current" or mode == "off" and "OFF"
+      or (number(mode) and string.format("%.0fk", number(mode) / 1000) or "Current")
+    if mode == "current" and (graph.proficiencyWidth or 150) < 140 then proficiency = "Live" end
+    self:setGraphLabel(graph.proficiencyLabel, "Prof: " .. proficiency,
+      graph.proficiencyWidth or 150, graph.font or 12)
+    local status = self:refreshStatus() or ""
+    if (graph.statusWidth or 0) < 260 then
+      status = status:gsub("Next route update in ", "Next: "):gsub("Next update in ", "Next: ")
+    end
+    if (graph.statusWidth or 0) < 100 then
+      local seconds = status:match("^Next: (%d+s)%.?$")
+      if seconds then status = "In " .. seconds end
+    end
+    self:setGraphLabel(graph.status, status, graph.statusWidth or ((graph.width or WIDTH) - 94), graph.font or 12)
+  end
+
+  function Watch:renderCombinedCurrentRates(graph)
+    local rows, low, high = {}, graph.lowValue, graph.highValue
+    local show = self.settings.metric == "rate" and graph.currentRateGutter > 0
+      and number(low) and number(high) and high > low
+    if show then
+      for i, data in ipairs(self.comparisonData or {}) do
+        local rate = data.quote and number(data.quote.ratio)
+        if rate then
+          -- Match the marker's vertical coordinate inside the plot. Anchoring
+          -- to the plot itself also follows compact mode and resizing.
+          local top = graph.chart.height
+            - graph.chart.height * (rate - low) / (high - low)
+          rows[#rows + 1] = {index = i, rate = rate,
+            sourceTop = top, top = math.max(9, math.min(graph.chart.height - 9, top)),
+            color = graph.chart.layers[i] and graph.chart.layers[i].color or {1, 1, 1}}
+        end
+      end
+    end
+    table.sort(rows, function(a, b)
+      if a.top == b.top then return a.index < b.index end
+      return a.top < b.top
+    end)
+    local gap = (graph.font or 12) + 6
+    for i = 2, #rows do rows[i].top = math.max(rows[i].top, rows[i - 1].top + gap) end
+    if #rows > 0 then
+      local overflow = rows[#rows].top - (graph.chart.height - 9)
+      if overflow > 0 then for _, row in ipairs(rows) do row.top = row.top - overflow end end
+    end
+    local used = {}
+    for _, row in ipairs(rows) do
+      local label = graph.currentRates[row.index]
+      if label then
+        local text = string.format("%.1f%%", row.rate)
+        if self.ctx.now() - (self.comparisonData[row.index].quote.at or 0)
+          > (self.staleAfter and self:staleAfter() or 90) then text = text .. "*" end
+        if label.text ~= text then label:SetText(text) end
+        pcall(function() label.style:SetColor(row.color[1], row.color[2], row.color[3], 1) end)
+        label:SetExtent(54, 18)
+        label:RemoveAllAnchors()
+        label:AddAnchor("LEFT", graph.chart.plot, "TOPLEFT", graph.chart.width + 10, row.top)
+        label:Show(true); used[row.index] = true
+        local guide = graph.currentRateGuides[row.index]
+        guide:SetLineColor(row.color[1], row.color[2], row.color[3], 0.8)
+        local displaced = math.abs(row.top - row.sourceTop) > 0.5
+        if displaced then
+          local geometry = table.concat({graph.chart.width, graph.chart.height, row.sourceTop, row.top}, ":")
+          if graph.currentRateGeometry[row.index] ~= geometry then
+            guide:SetExtent(graph.chart.width + 8, graph.chart.height)
+            guide:ClearPoints()
+            guide:SetPoints({{beginX = graph.chart.width, beginY = graph.chart.height - row.sourceTop,
+              endX = graph.chart.width + 8, endY = graph.chart.height - row.top}})
+            graph.currentRateGeometry[row.index] = geometry
+          end
+        end
+        guide:Show(displaced)
+      end
+    end
+    for i, label in ipairs(graph.currentRates or {}) do
+      if not used[i] then label:Show(false); graph.currentRateGuides[i]:Show(false) end
+    end
   end
 
   function Watch:renderCombinedGraph()
@@ -463,6 +613,10 @@ function TradePacksRateCombined.install(Watch)
       for _, point in pairs(data.columns or {}) do
         local value = number(point.value)
         if value then low, high = math.min(low or value, value), math.max(high or value, value) end
+      end
+      if s.metric == "rate" and data.quote then
+        local rate = number(data.quote.ratio)
+        if rate then low, high = math.min(low or rate, rate), math.max(high or rate, rate) end
       end
     end
     if not layout then
@@ -479,6 +633,7 @@ function TradePacksRateCombined.install(Watch)
     self:setGraphLabel(graph.title, s.metric == "both" and "Rate + Price" or metric,
       graph.width - 230, graph.font)
     self:renderComparison(graph.chart, low, high, layout)
+    self:renderCombinedCurrentRates(graph)
     self:renderValueAxis(graph.chart, low, high)
     if self.renderPriceOverlay then self:renderPriceOverlay(graph.chart, self.comparisonData, layout) end
     self:renderTicks(graph.ticks, graph.chart, layout)

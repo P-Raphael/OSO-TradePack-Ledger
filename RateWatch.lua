@@ -175,6 +175,71 @@ function Watch:trimGraphPositions()
   for id in pairs(active) do retainColor(id) end
   for _, entry in ipairs(entries) do retainColor(entry.name) end
   self.settings.seriesColors = colors
+  local aliases, aliasCount = {}, 0
+  local function retainAlias(id)
+    local value = type(self.settings.packAliases) == "table" and self.settings.packAliases[id]
+    if aliasCount < 12 and type(value) == "string" and value ~= "" and #value <= 240 and not aliases[id]
+      and not value:find("[%c]") and #value:gsub("[\128-\191]", "") <= 60 then
+      aliases[id], aliasCount = value, aliasCount + 1
+    end
+  end
+  for id in pairs(active) do retainAlias(id) end
+  for _, entry in ipairs(entries) do retainAlias(entry.name) end
+  self.settings.packAliases = aliases
+end
+
+function Watch:showGraphTextMenu(graph)
+  self:showMenu({{id = "detailed", name = "Detailed pack names and prices"},
+    {id = "compact", name = "Compact pack text"}, {id = "hidden", name = "Hide pack names and prices"},
+    {id = "names", name = "Customize route labels..."}}, function(value)
+    if value.id == "names" then return self:showPackNameMenu(graph) end
+    local style = self:graphStyle(graph)
+    style.hideNames, style.compact = value.id == "hidden", value.id == "compact"
+    self:saveGraphStyle(graph, style); self:render()
+  end, 24, false, "graph-text", graph.window)
+end
+
+function Watch:showPackNameMenu(graph)
+  if not graph.combined and graph.entry then return self:showPackNameEditor(graph, graph.entry) end
+  local options = {}
+  for _, entry in ipairs(self:selectedEntries()) do
+    options[#options + 1] = {id = entry.id, name = entry.name .. " | " .. self:routeLabel(entry), entry = entry}
+  end
+  self:showMenu(options, function(value) self:showPackNameEditor(graph, value.entry) end,
+    24, false, "graph-names", graph.window)
+end
+
+function Watch:showPackNameEditor(graph, entry)
+  if not self.nameEditor then
+    local c = self.ctx
+    local w = c.widget("window", "TradePacksPackNameEditor", nil, 20, 24, 400, 180)
+    self.nameEditor = w
+    pcall(function() w:SetTitleText(""); w:SetCloseOnEscape(true); w:SetDrawPriority(101) end)
+    local bg = w:CreateColorDrawable(c.dark and 0.08 or 0.96, c.dark and 0.07 or 0.89,
+      c.dark and 0.06 or 0.69, 1, "background")
+    bg:AddAnchor("TOPLEFT", w, 0, 0); bg:AddAnchor("BOTTOMRIGHT", w, 0, 0)
+    self.nameTitle = c.label("TradePacksPackNameTitle", w, 12, 12, 376, 20, "")
+    self.nameInput = c.editbox("TradePacksPackNameInput", w, 20, 44, 360, 26, "")
+    c.label("TradePacksPackNameHint", w, 20, 76, 360, 20, "Blank restores pack and route text. Maximum 60 characters.")
+    self.nameError = c.label("TradePacksPackNameError", w, 20, 142, 360, 20, "")
+    self.nameApply = c.button("TradePacksPackNameApply", w, 146, 105, 108, 26, "Apply", function()
+      local ok, value = pcall(function() return self.nameInput:GetText() end)
+      if not ok or type(value) ~= "string" then self.nameError:SetText("Could not read the name. Try again."); return end
+      value = value:gsub("^%s+", ""):gsub("%s+$", "")
+      if #value > 240 or value:find("[%c]") or #value:gsub("[\128-\191]", "") > 60 then
+        self.nameError:SetText("Use a single line of up to 60 characters."); return
+      end
+      self.settings.packAliases[self.nameEntryId] = value ~= "" and value or nil
+      w:Show(false); self:saveSettings(); self:render()
+    end)
+    c.button("TradePacksPackNameCancel", w, 270, 105, 108, 26, "Cancel", function() w:Show(false) end)
+  end
+  self.nameOwner, self.nameEntryId = graph.window, entry.id
+  self.nameTitle:SetText(self.ctx.fit("Route label: " .. entry.name, 48))
+  self.nameInput:SetText(self.settings.packAliases[entry.id] or "")
+  self.nameError:SetText("")
+  self:placePicker(self.nameEditor, graph.window, 400, 180, 24)
+  self.nameEditor:Show(true); self:raisePicker()
 end
 
 function Watch:seriesColor(id, index, transparent)
@@ -310,6 +375,7 @@ function Watch:syncMiniGraphs(forcePosition)
     if graph.id ~= id and self.menuOwner == graph.window then
       self.menu:Show(false); self.periodEditor:Show(false)
     end
+    if graph.id ~= id and self.nameOwner == graph.window and self.nameEditor then self.nameEditor:Show(false) end
     if graph.id ~= id or forcePosition or not graph.positioned then
       graph.id, graph.name, graph.entry, graph.positioned = id, item and item.name, item, true
       self:layoutFloatingGraph(graph)
@@ -617,6 +683,10 @@ function Watch:minuteChartData(name)
   local first, columns, observed = last - minutes + 1, {}, 0
   local layout = {minute = true, firstAt = first * 60, count = minutes,
     hours = s.recentHours, step = 1, units = minutes}
+  local interval = math.max(30, self.routeInterval or 30) * math.max(1, #self:trackedRoutes())
+  -- Minute storage rounds observation times. Allow bounded timing slack around
+  -- one polling cycle, without bridging an entire missed cycle.
+  layout.maxGapMinutes = math.max(1, math.floor((interval + math.min(60, interval / 3)) / 60))
   if item then
     local series = self:seriesFor(item.from, item.to, item.name)
     for _, row in ipairs(self.minuteHistory:rows(series, now)) do
@@ -993,6 +1063,7 @@ function Watch:visibility()
   if self.menuOwner and not self.menuOwner:IsVisible() then
     self.menu:Show(false); self.periodEditor:Show(false)
   end
+  if self.nameEditor and self.nameOwner and not self.nameOwner:IsVisible() then self.nameEditor:Show(false) end
   if self:isVisible() and not self.initialized then
     self.initialized = true
     self:discover()
@@ -1100,10 +1171,11 @@ function Watch:renderStatus()
       local age = graph.quoteAt and math.max(0, now - graph.quoteAt)
       local text = age and ("Updated " .. (age < 60 and (math.floor(age) .. "s") or (math.floor(age / 60) .. "m"))
         .. " ago" .. (age > self:staleAfter() and " - stale" or "") .. " | ") or ""
-      self:setGraphLabel(graph.status, text .. status, (graph.width or WIDTH) - 94, graph.font or 12)
+      self:setGraphLabel(graph.status, text .. status, graph.statusWidth or ((graph.width or WIDTH) - 112), graph.font or 12)
     end
   end
   self:renderCombinedStatus()
+  if self.menuKind == "pack" and self.menu:IsVisible() then self:renderMenu() end
   self.nextStatusAt = now + 1
 end
 
@@ -1114,6 +1186,7 @@ function Watch:raisePicker()
   if self.periodEditor and self.periodEditor:IsVisible() then
     pcall(function() self.periodEditor:Raise() end)
   end
+  if self.nameEditor and self.nameEditor:IsVisible() then pcall(function() self.nameEditor:Raise() end) end
 end
 
 function Watch:placePicker(picker, owner, width, height, y)
@@ -1128,6 +1201,7 @@ end
 function Watch:showMenu(options, select, y, multi, kind, owner)
   owner = owner or self.window
   if self.periodEditor then self.periodEditor:Show(false) end
+  if self.nameEditor then self.nameEditor:Show(false) end
   if kind and self.menuKind == kind and self.menuOwner == owner and self.menu:IsVisible() then
     self.menu:Show(false)
     return
@@ -1146,6 +1220,17 @@ function Watch:renderMenu()
   local options, page = self.menuOptions or {}, self.menuPage or 1
   local pages = math.max(1, math.ceil(#options / 8))
   self.menuPage = math.max(1, math.min(page, pages))
+  local loading = self.menuKind == "pack"
+    and self.routePacks[routeKey(self.settings.from, self.settings.to)] == nil
+  if self.menuLoading then
+    self.menuLoading:Show(loading)
+    if loading then
+      local rows = math.min(8, #options - (self.menuPage - 1) * 8)
+      self.menuLoading:RemoveAllAnchors()
+      self.menuLoading:AddAnchor("TOPLEFT", self.menu, 8, 8 + math.max(0, rows) * 44)
+      self.menuLoading:SetText(self.ctx.fit("Loading available packs... " .. self:refreshStatus(), 70))
+    end
+  end
   for i, button in ipairs(self.menuRows) do
     local value = options[(self.menuPage - 1) * 8 + i]
     button.option = value
@@ -1352,7 +1437,7 @@ function Watch:renderLineChart(chart, columns, low, high, layout, layerIndex)
   local layer = self:chartLayer(chart, layerIndex or 1)
   local signature = {tostring(low), tostring(high), self.settings.metric, tostring(layout.minute),
     tostring(layout.hourly), tostring(layout.count), tostring(layout.hours), tostring(layout.step),
-    tostring(chart.width), tostring(chart.height)}
+    tostring(chart.width), tostring(chart.height), tostring(layout.maxGapMinutes)}
   for i = 1, 60 do
     local point = columns[i]
     signature[#signature + 1] = point and (tostring(point.value) .. ":" .. tostring(point.complete)) or "-"
@@ -1380,12 +1465,16 @@ function Watch:renderLineChart(chart, columns, low, high, layout, layerIndex)
       end
       -- Partial multi-hour buckets still show their observed average, but a
       -- line through them would conceal a gap inside the bucket.
-      if previous and previous.complete ~= false and point.complete ~= false then
+      local maxGap = layout.minute and (layout.maxGapMinutes or 1) or 1
+      if previous and i - previous.index <= maxGap and previous.complete ~= false and point.complete ~= false then
         segments[#segments + 1] = {beginX = previous.x, beginY = previous.y, endX = x, endY = y}
       end
-      previous = {x = x, y = y, complete = point.complete}
+      previous = {x = x, y = y, index = i, complete = point.complete}
     else
-      previous = nil -- Missing hours break the line instead of implying observations.
+      -- Keep the last actual minute reading for the bounded polling-gap check.
+      -- An observed point with no calculable value, or a missing aggregate,
+      -- still breaks the line immediately.
+      if not layout.minute or point ~= nil then previous = nil end
     end
   end
   layer.line:ClearPoints()
@@ -1641,6 +1730,8 @@ function Watch:createUi()
     c.dark and 0.06 or 0.69, 1, "background")
   bg:AddAnchor("TOPLEFT", menu, 0, 0); bg:AddAnchor("BOTTOMRIGHT", menu, 0, 0)
   self.menuNameLabels, self.menuRouteLabels = {}, {}
+  self.menuLoading = c.label("TradePacksRatesMenuLoading", menu, 8, 8, 524, 20, "Loading available packs...")
+  self.menuLoading:EnablePick(false); self.menuLoading:Show(false)
   for i = 1, 8 do
     self.menuRows[i] = c.textButton("TradePacksRatesMenuRow" .. i, menu, 8, 4 + (i - 1) * 27, 524, 25, "", function()
       local option = self.menuRows[i].option
@@ -1730,7 +1821,7 @@ function Watch:renderSeriesLegends()
         if data.count == 0 then value = value .. " | no history" end
         if self.settings.showRatePrice or self.settings.metric == "both" then value = self:ratePriceText(data) end
         local prefix = tostring(i) .. (data.id == self.settings.focusId and "* " or ". ")
-        self:setGraphLabel(full, prefix .. data.name, 408, 12, " | " .. value)
+        self:setGraphLabel(full, prefix .. self:displayPackName(data), 408, 12, " | " .. value)
         local color = self:seriesColor(data.id, i, false)
         pcall(function()
           full.style:SetColor(color[1], color[2], color[3], 1)
@@ -1855,11 +1946,16 @@ function Watch:renderMiniGraph(graph, data)
   local tail = " | " .. (bothValues and (quote and string.format("%.1f%%", quote.ratio) or "rate unavailable")
     or suffix:gsub("^Rate: ", ""))
   if s.metric == "profit" and costs and costs.stalePrices then tail = tail .. " | cached costs" end
-  local compactName = (graph.name or "Choose pack") .. (graph.entry and (" | " .. self:routeLabel(graph.entry)) or "")
-  self:setGraphLabel(graph.title, graph.compact and compactName or (graph.name or "Choose a pack in ..."),
-    graph.width - 230, graph.font, (graph.compact or bothValues) and tail or "")
+  local name = self:displayPackName(graph.entry)
+  local custom = graph.entry and s.packAliases and s.packAliases[graph.entry.id]
+  local compactName = name .. (graph.entry and not custom and (" | " .. self:routeLabel(graph.entry)) or "")
+  local title = graph.hideNames and (s.metric == "profit" and "Profit" or s.metric == "price" and "Price" or "Payout rate")
+    or graph.compact and compactName or name
+  self:setGraphLabel(graph.title, title,
+    graph.width - 230, graph.font, not graph.hideNames and (graph.compact or bothValues) and tail or "")
   self:setGraphLabel(graph.routeLabel, graph.entry and self:routeLabel(graph.entry) or "Choose From/To in the controls",
     graph.width - 20, graph.font)
+  graph.routeLabel:Show(not graph.compact and not graph.hideNames and not custom)
   local bodyChars = math.max(12, math.floor((graph.width - 20) / (graph.font * 0.55)))
   self:setGraphLabel(graph.quoteLabel, suffix .. " | " .. (s.mode == "recent" and periodLabel(s.recentHours)
     or (s.hourlyDays .. "d avg")) .. " UTC" .. s.offset, graph.width - 20, graph.font)

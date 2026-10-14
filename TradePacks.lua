@@ -1,5 +1,5 @@
 local ADDON_NAME = "TradePacks"
-local ADDON_VERSION = "1.7.6"
+local ADDON_VERSION = "1.8.0"
 local SAVE_KEY = "TradePacksState"
 local HISTORY_SAVE_KEY = "TradePacksHistoryState"
 local OPENER_SAVE_KEY = "TradePacksOpenerPosition"
@@ -5612,8 +5612,8 @@ local function createUi()
   end)
   ui.archiveButton = makeButton("TradePacksArchiveDelivered", parent, 129, 706 + listOffset, 106, 24,
     "Archive", function() archiveOrRestoreRecords() end)
-  ui.ratesButton = makeButton("TradePacksRatesButton", parent, 243, 706 + listOffset, 90, 24,
-    "Rates", function()
+  ui.ratesButton = makeButton("TradePacksRatesButton", parent, 243, 706 + listOffset, 112, 24,
+    "Graph Rates", function()
       if not runtime.ratePanel then runtime.initializeRatePanel() end
       if runtime.ratePanel then runtime.ratePanel:toggle() end
     end)

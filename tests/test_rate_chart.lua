@@ -155,4 +155,23 @@ for i = 1, 120 do
   checkAxis(full, low, high)
   assert(#full.valueAxis <= 7, "axis widget pool grew past its cap")
 end
-print("PASS: RateChart bounds, payout brackets, transparency, scale updates, reuse, and native geometry cache")
+local adaptive = chart("Adaptive", true, 240)
+low, high = draw(adaptive, 125, 128)
+local detailed = visibleTicks(adaptive)
+assert(#detailed == 9 and detailed[6].value == 115 and detailed[8].value == 125,
+  "tall rate graph lacks five-percent marks")
+local pool = #adaptive.valueAxis
+adaptive.height = 120
+draw(adaptive, 125, 128)
+assert(#visibleTicks(adaptive) == 5 and #adaptive.valueAxis == pool,
+  "short graph did not hide/reuse intermediate marks")
+adaptive.height = 80
+draw(adaptive, 125, 128)
+assert(#visibleTicks(adaptive) <= 4)
+adaptive.height = 240
+draw(adaptive, 125, 128)
+assert(#visibleTicks(adaptive) == 9 and #adaptive.valueAxis == pool)
+before = calls
+draw(adaptive, 125, 128)
+assert(calls == before, "unchanged detailed axis rebuilds native widgets")
+print("PASS: RateChart adaptive five-percent marks, bounds, transparency, reuse, and geometry cache")

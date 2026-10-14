@@ -915,4 +915,35 @@ do
   picker.packButton.handlers.OnClick()
   assert(not picker.menu:IsVisible(), "multi-pack picker lost its button toggle")
 end
-print("TradePacks rate panel / minute, profit, background, picker and coverage checks passed; " .. comparisons .. " Folio105 pricing comparisons passed")
+do
+  local chart = watch:createLineChart("PollingGapFixture", watch.window, 0, 0, 360, 120, true)
+  local layout = {minute = true, count = 15, hours = 0.25, step = 1, maxGapMinutes = 3}
+  local columns = {[1] = {value = 110}, [4] = {value = 120}, [8] = {value = 125}, [14] = {value = 130}}
+  watch.settings.metric = "rate"
+  watch:renderLineChart(chart, columns, 90, 130, layout)
+  assert(#chart.line.points == 1, "scheduled polling gaps were not connected or long gaps were bridged")
+  assert(not chart.markers[2].visible and not chart.markers[3].visible and columns[2] == nil,
+    "connecting a polling gap created observations")
+  layout.maxGapMinutes = 4
+  watch:renderLineChart(chart, columns, 90, 130, layout)
+  assert(#chart.line.points == 2, "changed polling interval did not invalidate the geometry cache")
+  columns[4].complete = false
+  watch:renderLineChart(chart, columns, 90, 130, layout)
+  assert(#chart.line.points == 0, "partial bucket was connected")
+  columns[4].complete, columns[2] = true, {value = nil}
+  watch:renderLineChart(chart, columns, 90, 130, layout)
+  assert(#chart.line.points == 1, "missing price at an observed minute did not break the line")
+  layout.minute = false
+  watch:renderLineChart(chart, columns, 90, 130, layout)
+  assert(#chart.line.points == 0, "minute bridging leaked into hourly aggregates")
+  local original = watch.trackedRoutes
+  watch.trackedRoutes = function() return {{}, {}, {}, {}, {}, {}} end
+  watch.settings.mode, watch.settings.recentHours, watch.routeInterval = "recent", 0.5, 30
+  local _, _, _, cadence = watch:minuteChartData()
+  assert(cadence.maxGapMinutes == 4, "six-route minute chart lacks normal polling tolerance")
+  watch.routeInterval = 60
+  _, _, _, cadence = watch:minuteChartData()
+  assert(cadence.maxGapMinutes == 7, "server cooldown was excluded from expected sampling")
+  watch.trackedRoutes = original
+end
+print("TradePacks rate panel / minute, scheduled polling gaps, picker and coverage checks passed; " .. comparisons .. " Folio105 pricing comparisons passed")

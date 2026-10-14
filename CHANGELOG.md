@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.8.0] - 2026-10-14
+
+### Graph controls and current rate labels
+- Rename the ledger's Rates button to Graph Rates.
+- Add a Text menu with detailed, compact and hidden pack rows. Hiding names and prices reduces the floating graph height while preserving its plot size and position.
+- Add saved labels per pack/route through Text > Customize route labels. A custom label replaces the entire pack/origin/destination text in graph legends and headers. Blank labels restore the original text; custom labels do not affect pack identities, prices, history or selection lists.
+- Show 5% axis marks such as 115% and 125% when the graph is tall enough. Switch to wider intervals on shorter plots and reuse hidden marks when resized taller.
+- Connect actual minute readings across the expected route polling interval, with bounded timing allowance. Keep markers and coverage based on actual observations; longer gaps and incomplete aggregate buckets still break the line.
+- Move the combined graph's update status to the right footer and display the selected Commerce proficiency mode on the left, beside Color.
+- Bind both edges of the status label explicitly, with its right edge anchored before the resize handle. Restore those anchors after text changes in separate and combined graph footers.
+- Show a loading message in the Rates pack picker while the selected route's available packs are being fetched. Keep saved selections usable and show request/retry progress until the list arrives.
+- In the combined Rate graph, show the latest payout percentage at the right edge, using the matching series color so each value can be identified with its pack and route.
+- Include the latest reading in the visible rate range and reserve space for the labels. Labels follow the plot during movement, updates and resizing. Separate close or equal values with a short colored guide to their exact rate height; add `*` when a displayed reading is stale.
+
 ## [1.7.6] - 2026-10-12
 
 ### Easier-to-read, customizable rate graphs
