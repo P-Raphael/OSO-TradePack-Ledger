@@ -2,7 +2,7 @@
 
 Track tradepack sales, costs, profit, and payout rates on ArcheRage.
 
-![Tradepack ledger and rate panel](preview.png)
+![Tradepack ledger and rate panel](preview-ledger.png)
 
 ![Floating rate comparison graph](preview-graph.png)
 

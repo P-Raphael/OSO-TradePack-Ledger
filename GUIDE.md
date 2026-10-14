@@ -2,7 +2,7 @@
 
 A lightweight ArcheRage addon that tracks your trade pack sales and tells you exactly how much profit you made on each one.
 
-![OPS UI](preview.png)
+![OPS UI](preview-ledger.png)
 
 ## What it does
 
