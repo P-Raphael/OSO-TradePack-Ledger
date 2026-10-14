@@ -96,7 +96,8 @@ function TradePacksRateChart.install(Watch)
           pcall(function()
             label.style:SetFontSize(11)
             if ALIGN_RIGHT or RIGHT then label.style:SetAlign(ALIGN_RIGHT or RIGHT) end
-            if chart.transparent then label.style:SetColor(1, 1, 1, 1); label.style:SetOutline(true) end
+            if chart.transparent or self.ctx.dark then label.style:SetColor(1, 1, 1, 1) end
+            if chart.transparent then label.style:SetOutline(true) end
           end)
           tick = {line = line, label = label}
           ticks[i] = tick

@@ -244,7 +244,8 @@ end
 
 function Watch:seriesColor(id, index, transparent)
   local hex = self.settings.seriesColors and self.settings.seriesColors[id]
-  local key = (hex or tostring(index)) .. tostring(transparent)
+  local light = transparent or self.ctx.dark
+  local key = (hex or tostring(index)) .. tostring(light)
   self.seriesColorCache = self.seriesColorCache or {}
   local cacheId = tostring(id) .. tostring(transparent)
   local cached = self.seriesColorCache[cacheId]
@@ -252,7 +253,7 @@ function Watch:seriesColor(id, index, transparent)
   local color
   if hex then color = {tonumber(hex:sub(1, 2), 16) / 255, tonumber(hex:sub(3, 4), 16) / 255, tonumber(hex:sub(5, 6), 16) / 255}
   else
-    local base, extra = SERIES_COLORS[index] or SERIES_COLORS[1], transparent and 0.2 or 0
+    local base, extra = SERIES_COLORS[index] or SERIES_COLORS[1], light and 0.2 or 0
     color = {math.min(1, base[1] + extra), math.min(1, base[2] + extra), math.min(1, base[3] + extra)}
   end
   self.seriesColorCache[cacheId] = {key = key, color = color}
@@ -1347,7 +1348,7 @@ function Watch:createLineChart(id, parent, x, y, width, height, transparent, sel
     background:AddAnchor("BOTTOMRIGHT", plot, 0, 0)
   end
   local r, g, b = 0.2, 0.53, 0.25
-  if transparent then r, g, b = 0.35, 0.95, 0.48 end
+  if transparent or self.ctx.dark then r, g, b = 0.35, 0.95, 0.48 end
   local line = self.ctx.widget("line", id .. "Line", plot, 0, 0, width, height)
   line:EnablePick(false)
   line:SetLineColor(r, g, b, 1)
@@ -1397,7 +1398,7 @@ end
 function Watch:chartLayer(chart, index)
   if chart.layers[index] then return chart.layers[index] end
   local color = SERIES_COLORS[index]
-  if chart.transparent then
+  if chart.transparent or self.ctx.dark then
     color = {math.min(1, color[1] + 0.2), math.min(1, color[2] + 0.2), math.min(1, color[3] + 0.2)}
   end
   local id = chart.id .. "Series" .. index

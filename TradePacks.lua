@@ -1,5 +1,5 @@
 local ADDON_NAME = "TradePacks"
-local ADDON_VERSION = "1.8.0"
+local ADDON_VERSION = "1.8.1"
 local SAVE_KEY = "TradePacksState"
 local HISTORY_SAVE_KEY = "TradePacksHistoryState"
 local OPENER_SAVE_KEY = "TradePacksOpenerPosition"
@@ -48,8 +48,8 @@ local WINDOW_NINEPART_PATH = "ui/common_new/default.dds"
 -- for white so labels and buttons stay readable on the dark background.
 local DARK_MODE = (type(isUserDarkMode) == "function") and isUserDarkMode() or false
 local TEXT_BROWN = DARK_MODE and { 1, 1, 1, 1 } or { 125 / 255, 76 / 255, 7 / 255, 1 }
-local TEXT_RED = { 178 / 255, 42 / 255, 28 / 255, 1 }
-local TEXT_GREEN = { 45 / 255, 128 / 255, 52 / 255, 1 }
+local TEXT_RED = DARK_MODE and { 1, 0.45, 0.4, 1 } or { 178 / 255, 42 / 255, 28 / 255, 1 }
+local TEXT_GREEN = DARK_MODE and { 0.4, 0.85, 0.45, 1 } or { 45 / 255, 128 / 255, 52 / 255, 1 }
 
 local API = {
   X2Auction = 51,

@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.8.1] - 2026-10-14
+
+### Dark mode readability
+- Brighten default full-panel graph colors and red/green status text in dark mode. Keep custom series colors as entered and use white axis labels on dark plots.
+- Check ledger/cost/history workflows and floating graph menus, naming editors, resizing, persistence and controls with dark mode enabled in the mock fixtures. Verify opaque dark popup backgrounds and default series contrast; native dark-skin rendering still requires an in-game check.
+
 ## [1.8.0] - 2026-10-14
 
 ### Graph controls and current rate labels

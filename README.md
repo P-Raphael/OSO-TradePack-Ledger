@@ -1,4 +1,4 @@
-# OSO Packs Service — v1.8.0
+# OSO Packs Service — v1.8.1
 
 Track tradepack sales, costs, profit, and payout rates on ArcheRage.
 

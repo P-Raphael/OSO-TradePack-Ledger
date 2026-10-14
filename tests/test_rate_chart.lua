@@ -174,4 +174,11 @@ assert(#visibleTicks(adaptive) == 9 and #adaptive.valueAxis == pool)
 before = calls
 draw(adaptive, 125, 128)
 assert(calls == before, "unchanged detailed axis rebuilds native widgets")
-print("PASS: RateChart adaptive five-percent marks, bounds, transparency, reuse, and geometry cache")
+watch.ctx.dark = true
+local darkAxis = chart("DarkFull", false, 240)
+draw(darkAxis, 122, 126)
+for _, tick in ipairs(visibleTicks(darkAxis)) do
+  assert(tick.label.textColor[1] == 1 and tick.label.textColor[2] == 1 and tick.label.textColor[3] == 1)
+  assert(tick.line.color[1] > 0.8, "dark full-panel grid uses light-theme dark lines")
+end
+print("PASS: RateChart adaptive marks, dark-theme contrast, bounds, reuse, and geometry cache")

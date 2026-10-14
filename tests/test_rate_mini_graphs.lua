@@ -1,6 +1,7 @@
 -- Run from Addon: lua TradePacks/tests/test_rate_mini_graphs.lua
 -- Mock tests cover data selection and chart instructions, not native rendering.
 local now = 20000 * 86400 + 20 * 3600
+local darkMode = arg and arg[1] == "dark"
 local saved, widgets, errors, queries = {}, {}, {}, {}
 local reads, writes = 0, 0
 local lineMutations, markerAnchors, windowAnchors = 0, 0, 0
@@ -57,17 +58,20 @@ function Widget:SetColor(...) self.color = {...} end
 function Widget:SetLineThickness(thickness) self.thickness = thickness end
 function Widget:CreateColorDrawable(r, g, b, alpha, layer)
   local d = widget("drawable", self.name .. "Draw" .. (#self.draws + 1), self, 0, 0, 0, 0)
-  d.layer, d.alpha = layer, alpha; self.draws[#self.draws + 1] = d; return d
+  d.layer, d.alpha, d.color = layer, alpha, {r, g, b, alpha}; self.draws[#self.draws + 1] = d; return d
 end
 UIParent = {GetScreenWidth = function() return 1920 end, GetScreenHeight = function() return 1080 end}
 local function label(name, parent, x, y, width, height, text)
-  local w = widget("label", name, parent, x, y, width, height); w:SetText(text); return w
+  local w = widget("label", name, parent, x, y, width, height); w:SetText(text)
+  w.style:SetColor(darkMode and 1 or 125 / 255, darkMode and 1 or 76 / 255, darkMode and 1 or 7 / 255, 1)
+  return w
 end
 local function button(name, parent, x, y, width, height, text, fn)
   local w = label(name, parent, x, y, width, height, text); w:SetHandler("OnClick", fn); return w
 end
 local costs = {}
 local ctx = {
+  dark = darkMode,
   ledger = widget("window", "ledger", nil, 30, 30, 660, 864),
   widget = widget, label = label, editbox = label, button = button, textButton = button,
   setButtonText = function(w, text) w:SetText(text) end, now = function() return math.floor(now) end,
@@ -763,5 +767,28 @@ local single = graphFor(names, A)
 single.textButton.handlers.OnClick(); chooseMenu(names, "hidden")
 assert(single.hideNames and not single.quoteLabel.visible and not single.routeLabel.visible)
 assert(#queries == queryCount, "text customization requested new server prices")
+if darkMode then
+  local function luminance(color)
+    local linear = {}
+    for i = 1, 3 do linear[i] = color[i] <= 0.04045 and color[i] / 12.92
+      or ((color[i] + 0.055) / 1.055) ^ 2.4 end
+    return linear[1] * 0.2126 + linear[2] * 0.7152 + linear[3] * 0.0722
+  end
+  local background = luminance({15 / 255, 22 / 255, 29 / 255})
+  for i = 1, 6 do
+    local color = names:seriesColor("ThemeFixture" .. i, i, false)
+    assert((luminance(color) + 0.05) / (background + 0.05) >= 4.5,
+      "default graph series is difficult to read on the dark theme")
+  end
+  for _, popup in ipairs({names.menu, names.periodEditor, names.nameEditor}) do
+    local bg = popup.draws[1]
+    assert(bg.color[1] < 0.1 and bg.color[2] < 0.1 and bg.alpha == 1,
+      "dark picker/editor has a light or transparent background")
+  end
+  for _, text in ipairs({names.menuLoading, names.periodTitle, names.nameTitle, names.nameError}) do
+    assert(text.style.color[1] == 1 and text.style.color[2] == 1 and text.style.color[3] == 1,
+      "dark editor inherited brown text")
+  end
+end
 assert(#errors == 0, table.concat(errors, "; "))
 print("Rates mini-graph tests passed: independent windows/scales, dragging, restart, slot reuse, controls, periods, isolated failures and bounded work")

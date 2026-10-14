@@ -2,6 +2,7 @@
 local clock = 1700000000
 local widgetSuffix
 local saved, logs, widgets = {}, {}, {}
+isUserDarkMode = function() return arg and arg[1] == "dark" end
 local failRunWrites = false
 local failHistoryWrites = false
 local failHistoryMapWrites = false
@@ -70,6 +71,7 @@ function Widget:SetText(value)
   self.text = value
   if rawget(self, "autoSized") then self.width = #value * 9 + 20 end
 end
+function Widget:SetColor(...) self.color = {...} end
 function Widget:GetText()
   if self.kind == "editbox" then return end -- Mirrors the broken client widget.
   return self.text
@@ -720,4 +722,11 @@ assert(history().totalProfitCopper ~= exactTotal,
 for _, message in ipairs(logs) do
   assert(not message:find("history save failed", 1, true), message)
 end
-print("TradePacks v1.7.0 mock checks passed")
+if isUserDarkMode() then
+  local rates = widgets["TradePacksRatesButton" .. widgetSuffix]
+  assert(rates and rates.style.color[1] == 1 and rates.style.color[2] == 1 and rates.style.color[3] == 1,
+    "Graph Rates button did not inherit dark-mode white text")
+  local loading = widgets["TradePacksLoadingLabel" .. widgetSuffix]
+  assert(loading and loading.style.color[2] >= 0.8, "dark-mode status text uses the dim light-theme green")
+end
+print("TradePacks ledger/cost/history mock checks passed (" .. (isUserDarkMode() and "dark" or "light") .. " theme)")
